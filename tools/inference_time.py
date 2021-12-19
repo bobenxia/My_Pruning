@@ -18,11 +18,14 @@ def measure_inference_time(net, input, repeat=100):
 def count_params(module):
     return sum([ p.numel() for p in module.parameters() ])
 
-device = torch.device('cuda') 
-repeat = 100
 
-model = resnet50(pretrained=True).eval().to(device)
-fake_input = torch.randn(16,3,224,224).to(device)
-inference_time_before_pruning = measure_inference_time(model, fake_input, repeat)
-print("before pruning: inference time=%f s, parameters=%.1fM"%(inference_time_before_pruning, count_params(model)/1e6))
+
+if __name__=="__main__":
+    device = torch.device('cuda') 
+    repeat = 100
+
+    model = resnet50(pretrained=True).eval().to(device)
+    fake_input = torch.randn(16,3,224,224).to(device)
+    inference_time_before_pruning = measure_inference_time(model, fake_input, repeat)
+    print("before pruning: inference time=%f s, parameters=%.1fM"%(inference_time_before_pruning, count_params(model)/1e6))
 
