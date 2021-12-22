@@ -1,9 +1,8 @@
-# https://github.com/VainF/Torch-Pruning/tree/master/torch_pruning/prune
-
 import torch
 from abc import abstractclassmethod, ABC
 from typing import Sequence
 import random
+import warnings
 
 # https://github.com/VainF/Torch-Pruning/issues/49 by @Serjio42
 def round_pruning_amount(total_parameters, n_to_prune, round_to):
@@ -60,12 +59,3 @@ class L1Strategy(LNStrategy):
 class L2Strategy(LNStrategy):
     def __init__(self):
         super(L2Strategy, self).__init__(p=2)
-
-
-if __name__=="__main__":
-    net = torch.nn.Conv2d(3,16,3)
-    torch.nn.init.kaiming_normal_(net.weight)
-
-    strategy = L1Strategy()
-    pruning_index = strategy(net.weight, amount=0.2)
-    print(pruning_index)
