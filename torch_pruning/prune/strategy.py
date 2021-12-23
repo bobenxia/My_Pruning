@@ -47,6 +47,7 @@ class LNStrategy(BaseStrategy):
         l1_norm = torch.norm( weights.view(n, -1), p=self.p, dim=1 )
         n_to_prune = int(amount*n) if amount<1.0 else amount 
         n_to_prune = round_pruning_amount(n, n_to_prune, round_to)
+        print(f"Origin number is {n}, number to prune is {n_to_prune}")
         if n_to_prune == 0: return []
         threshold = torch.kthvalue(l1_norm, k=n_to_prune).values 
         indices = torch.nonzero(l1_norm <= threshold).view(-1).tolist()

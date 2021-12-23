@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import time
 
-def measure_inference_time(net, input, repeat=100):
+def measure_inference_time(model, input, repeat=100):
     torch.cuda.synchronize()
     start = time.perf_counter()
     for _ in range(repeat):
@@ -25,7 +25,7 @@ if __name__=="__main__":
     repeat = 100
 
     model = resnet50(pretrained=True).eval().to(device)
-    fake_input = torch.randn(16,3,224,224).to(device)
+    fake_input = torch.randn(1,3,224,224).to(device)
     inference_time_before_pruning = measure_inference_time(model, fake_input, repeat)
     print("before pruning: inference time=%f s, parameters=%.1fM"%(inference_time_before_pruning, count_params(model)/1e6))
 

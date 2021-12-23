@@ -1,9 +1,7 @@
 import sys, os
-
-from tools.inference_time import count_params, measure_inference_time
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
-from model.cifar.resnet import ResNet18
+from model.cifar.resnet import ResNet34
 import model.cifar.resnet as resnet
 
 import torch_pruning as tp
@@ -19,7 +17,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--mode', type=str, required=True, choices=['train', 'prune', 'test'])
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--verbose', action='store_true', default=False)
-parser.add_argument('--total_epochs', type=int, default=30)
+parser.add_argument('--total_epochs', type=int, default=60)
+parser.add_argument('--step_size', type=int, default=70)
 parser.add_argument('--round', type=int, default=1)
 parser.add_argument("--local_rank", default=-1, type=int)
 
@@ -66,36 +65,32 @@ def train_model(model, train_loader, test_loader):
     
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.98)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.step_size, 0.1)
     loss_func = nn.CrossEntropyLoss().to(local_rank)
     model.to(local_rank)
     # DDP: 构造DDP model
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
     best_acc = -1
-
-    import nvidia_dlprof_pytorch_nvtx as nvtx 
-    nvtx.init(enable_function_stack=True)
-    with torch.autograd.profiler.emit_nvtx():
-        for epoch in range(args.total_epochs):
-            model.train()
-            for i, (img, target) in enumerate(train_loader):
-                img, target = img.to(local_rank), target.to(local_rank)
-                optimizer.zero_grad()
-                out = model(img)
-                loss = loss_func(out, target)
-                loss.backward()
-                optimizer.step()
-                if i%10==0 and args.verbose:
-                    print("Epoch %d/%d, iter %d/%d, loss=%.4f"%(epoch, args.total_epochs, i, len(train_loader), loss.item()))
-            model.eval()
-            acc = eval(model, test_loader)
-            print("Epoch %d/%d, Acc=%.4f"%(epoch, args.total_epochs, acc))
-            if best_acc<acc:
-                torch.save( model.module, 'ResNet18-round%d.pth'%(args.round) )
-                best_acc=acc
-            scheduler.step()
-        print("Best Acc=%.4f"%(best_acc))
+    for epoch in range(args.total_epochs):
+        model.train()
+        for i, (img, target) in enumerate(train_loader):
+            img, target = img.to(local_rank), target.to(local_rank)
+            optimizer.zero_grad()
+            out = model(img)
+            loss = loss_func(out, target)
+            loss.backward()
+            optimizer.step()
+            if i%10==0 and args.verbose:
+                print("Epoch %d/%d, iter %d/%d, loss=%.4f"%(epoch, args.total_epochs, i, len(train_loader), loss.item()))
+        model.eval()
+        acc = eval(model, test_loader)
+        print("Epoch %d/%d, Acc=%.4f"%(epoch, args.total_epochs, acc))
+        if best_acc<acc:
+            torch.save( model.module, 'ResNet34-round%d.pth'%(args.round) )
+            best_acc=acc
+        scheduler.step()
+    print("Best Acc=%.4f"%(best_acc))
 
 def prune_model(model):
     model.cpu()
@@ -108,11 +103,10 @@ def prune_model(model):
         #pruning_index = np.argsort(L1_norm)[:num_pruned].tolist() # remove filters with small L1-Norm
         strategy = tp.strategy.L1Strategy()
         pruning_index = strategy(conv.weight, amount=amount)
-        print(amount, len(pruning_index))
         plan = DG.get_pruning_plan(conv, tp.prune_conv, pruning_index)
         plan.exec()
     
-    block_prune_probs = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+    block_prune_probs = [0.1, 0.1, 0.1, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.3, 0.3, 0.3]
     blk_id = 0
     for m in model.modules():
         if isinstance( m, resnet.BasicBlock ):
@@ -125,37 +119,25 @@ def main():
     train_loader, test_loader = get_dataloader()
     if args.mode=='train':
         args.round=0
-        model = ResNet18(num_classes=10)
-        # ckpt = 'ResNet18-round%d.pth'%(args.round)
-        # print("Load model from %s"%( ckpt ))
-        # model = torch.load( ckpt )
+        model = ResNet34(num_classes=10)
         train_model(model, train_loader, test_loader)
     elif args.mode=='prune':
-        previous_ckpt = 'ResNet18-round%d.pth'%(args.round-1)
+        previous_ckpt = 'ResNet34-round%d.pth'%(args.round-1)
         print("Pruning round %d, load model from %s"%( args.round, previous_ckpt ))
         model = torch.load( previous_ckpt )
-        params = sum([np.prod(p.size()) for p in model.parameters()])
-        print("Number of Parameters: %.1fM"%(params/1e6))
         prune_model(model)
-        # print(model)
+        print(model)
         params = sum([np.prod(p.size()) for p in model.parameters()])
         print("Number of Parameters: %.1fM"%(params/1e6))
-        torch.save( model, 'ResNet18-round%d.pth'%(args.round) )
         # train_model(model, train_loader, test_loader)
     elif args.mode=='test':
-        ckpt = 'ResNet18-round%d.pth'%(args.round)
+        ckpt = 'ResNet34-round%d.pth'%(args.round)
         print("Load model from %s"%( ckpt ))
         model = torch.load( ckpt )
         params = sum([np.prod(p.size()) for p in model.parameters()])
         print("Number of Parameters: %.1fM"%(params/1e6))
         acc = eval(model, test_loader)
         print("Acc=%.4f\n"%(acc))
-
-        device = torch.device('cuda') 
-        repeat = 1000
-        fake_input = torch.randn(1,3,32,32).to(device)
-        inference_time_before_pruning = measure_inference_time(model, fake_input, repeat)
-        print("before pruning: inference time=%f s, parameters=%.1fM"%(inference_time_before_pruning, count_params(model)/1e6))
 
 if __name__=='__main__':
     main()
