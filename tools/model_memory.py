@@ -21,7 +21,7 @@ def get_model_gpu_mem(model: nn.Module, input: Tensor, gpu_id: int = 0) -> float
     meminfo2 = pynvml.nvmlDeviceGetMemoryInfo(handle)
     pynvml.nvmlShutdown()
 
-    return (meminfo2.used-meminfo1.used)/1024**2
+    return (meminfo2.used - meminfo1.used) / 1024**2
 
 
 if __name__ == "__main__":

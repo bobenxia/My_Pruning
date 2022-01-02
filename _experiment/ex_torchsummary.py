@@ -11,4 +11,4 @@ data = torch.randn(1, 3, 224, 224).cuda()
 _ = model(data)
 
 meminfo2 = pynvml.nvmlDeviceGetMemoryInfo(handle)
-print((meminfo2.used-meminfo1.used)/1024**2)  # 已用显存大小
+print((meminfo2.used - meminfo1.used) / 1024**2)  # 已用显存大小

@@ -1,22 +1,25 @@
-from model.cifar.resnet import ResNet50
-import torch_pruning as tp
-import model.cifar.resnet as resnet
-from torchvision.datasets import CIFAR10
-from torchvision import transforms
-from torch.utils.tensorboard import SummaryWriter
-import torch.nn.functional as F
-import torch.nn as nn
-import torch
-import numpy as np
 import argparse
 import os
 import sys
 
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
+from torchvision import transforms
+from torchvision.datasets import CIFAR10
+
+import model.cifar.resnet as resnet
+import torch_pruning as tp
+from model.cifar.resnet import ResNet50
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
-
 parser = argparse.ArgumentParser()
-parser.add_argument('--mode', type=str, required=True,
+parser.add_argument('--mode',
+                    type=str,
+                    required=True,
                     choices=['train', 'prune', 'test', 'finetune'])
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--verbose', action='store_true', default=False)
@@ -30,16 +33,24 @@ local_rank = args.local_rank
 
 
 def get_dataloader():
-    train_loader = torch.utils.data.DataLoader(
-        CIFAR10('/data/xiazheng/', train=True, transform=transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-        ]), download=True), batch_size=args.batch_size, num_workers=2)
-    test_loader = torch.utils.data.DataLoader(
-        CIFAR10('/data/xiazheng/', train=False, transform=transforms.Compose([
-            transforms.ToTensor(),
-        ]), download=True), batch_size=args.batch_size, num_workers=2)
+    train_loader = torch.utils.data.DataLoader(CIFAR10('/data/xiazheng/',
+                                                       train=True,
+                                                       transform=transforms.Compose([
+                                                           transforms.RandomCrop(32, padding=4),
+                                                           transforms.RandomHorizontalFlip(),
+                                                           transforms.ToTensor(),
+                                                       ]),
+                                                       download=True),
+                                               batch_size=args.batch_size,
+                                               num_workers=2)
+    test_loader = torch.utils.data.DataLoader(CIFAR10('/data/xiazheng/',
+                                                      train=False,
+                                                      transform=transforms.Compose([
+                                                          transforms.ToTensor(),
+                                                      ]),
+                                                      download=True),
+                                              batch_size=args.batch_size,
+                                              num_workers=2)
     return train_loader, test_loader
 
 
@@ -69,8 +80,7 @@ def train_model(model, train_loader, test_loader, summary_writer):
     dist.init_process_group(backend='nccl')  # nccl是GPU设备上最快、最推荐的后端
 
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    optimizer = torch.optim.SGD(
-        model.parameters(), lr=0.04, momentum=0.9, weight_decay=1e-4)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.04, momentum=0.9, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
     loss_func = nn.CrossEntropyLoss().to(local_rank)
     model.to(local_rank)
@@ -98,8 +108,7 @@ def train_model(model, train_loader, test_loader, summary_writer):
         acc = eval(model, test_loader)
         print("Epoch %d/%d, Acc=%.4f" % (epoch, args.total_epochs, acc))
         if best_acc < acc:
-            torch.save(
-                model.module, 'save/train_and_prune/ResNet50-round%d.pth' % (args.round))
+            torch.save(model.module, 'save/train_and_prune/ResNet50-round%d.pth' % (args.round))
             best_acc = acc
         scheduler.step()
         writer.add_scalar('eval/acc', acc, epoch)
@@ -124,8 +133,10 @@ def prune_model(model):
         plan = DG.get_pruning_plan(conv, tp.prune_conv, pruning_index)
         plan.exec()
 
-    block_prune_probs = [0.125, 0.125, 0.125, 0.25, 0.25, 0.25,
-                         0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.375, 0.375, 0.375]
+    block_prune_probs = [
+        0.125, 0.125, 0.125, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.375,
+        0.375, 0.375
+    ]
     blk_id = 0
     for m in model.modules():
         if isinstance(m, resnet.Bottleneck):
@@ -133,8 +144,7 @@ def prune_model(model):
             prune_conv(m.conv2, block_prune_probs[blk_id])
             blk_id += 1
 
-    torch.save(model, 'save/train_and_prune/ResNet50-round%d.pth' %
-               (args.round))
+    torch.save(model, 'save/train_and_prune/ResNet50-round%d.pth' % (args.round))
     return model
 
 
@@ -143,33 +153,33 @@ def main():
     if args.mode == 'train':
         args.round = 0
         model = ResNet50(num_classes=10)
-        train_model(model, train_loader, test_loader,
+        train_model(model,
+                    train_loader,
+                    test_loader,
                     summary_writer="./runs/prune_resnet50_cifar10.log")
     elif args.mode == 'prune':
-        previous_ckpt = 'save/train_and_prune/ResNet50-round%d.pth' % (
-            args.round-1)
-        print("Pruning round %d, load model from %s" %
-              (args.round, previous_ckpt))
+        previous_ckpt = 'save/train_and_prune/ResNet50-round%d.pth' % (args.round - 1)
+        print("Pruning round %d, load model from %s" % (args.round, previous_ckpt))
         model = torch.load(previous_ckpt)
         params = sum([np.prod(p.size()) for p in model.parameters()])
-        print("Number of Parameters before prune: %.1fM" % (params/1e6))
+        print("Number of Parameters before prune: %.1fM" % (params / 1e6))
         prune_model(model)
         params = sum([np.prod(p.size()) for p in model.parameters()])
-        print("Number of Parameters after prune: %.1fM" % (params/1e6))
+        print("Number of Parameters after prune: %.1fM" % (params / 1e6))
     elif args.mode == 'finetune':
-        previous_ckpt = 'save/train_and_prune/ResNet50-round%d.pth' % (
-            args.round)
-        print("Finetune round %d, load model from %s" %
-              (args.round, previous_ckpt))
+        previous_ckpt = 'save/train_and_prune/ResNet50-round%d.pth' % (args.round)
+        print("Finetune round %d, load model from %s" % (args.round, previous_ckpt))
         model = torch.load(previous_ckpt)
-        train_model(model, train_loader, test_loader,
+        train_model(model,
+                    train_loader,
+                    test_loader,
                     summary_writer="./runs/prune_resnet50_cifar10_after_prune.log")
     elif args.mode == 'test':
         ckpt = 'save/train_and_prune/ResNet50-round%d.pth' % (args.round)
         print("Load model from %s" % (ckpt))
         model = torch.load(ckpt)
         params = sum([np.prod(p.size()) for p in model.parameters()])
-        print("Number of Parameters: %.1fM" % (params/1e6))
+        print("Number of Parameters: %.1fM" % (params / 1e6))
         acc = eval(model, test_loader)
         print("Acc=%.4f\n" % (acc))
 

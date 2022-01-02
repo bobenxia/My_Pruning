@@ -20,10 +20,8 @@ from model.cifar.resnet import ResNet34
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
-
 parser = argparse.ArgumentParser()
-parser.add_argument('--mode', type=str, required=True,
-                    choices=['train', 'prune', 'test'])
+parser.add_argument('--mode', type=str, required=True, choices=['train', 'prune', 'test'])
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--verbose', action='store_true', default=False)
 parser.add_argument('--total_epochs', type=int, default=20)
@@ -33,34 +31,37 @@ parser.add_argument("--local_rank", default=-1, type=int)
 
 
 def get_dataloader(distributed):
-    train_dataset = CIFAR10('/data/xiazheng/', train=True, transform=transforms.Compose([
-        transforms.RandomCrop(32, padding=4),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-    ]), download=True)
-    test_dataset = CIFAR10('/data/xiazheng/', train=False, transform=transforms.Compose([
-        transforms.ToTensor(),
-    ]), download=True)
+    train_dataset = CIFAR10('/data/xiazheng/',
+                            train=True,
+                            transform=transforms.Compose([
+                                transforms.RandomCrop(32, padding=4),
+                                transforms.RandomHorizontalFlip(),
+                                transforms.ToTensor(),
+                            ]),
+                            download=True)
+    test_dataset = CIFAR10('/data/xiazheng/',
+                           train=False,
+                           transform=transforms.Compose([
+                               transforms.ToTensor(),
+                           ]),
+                           download=True)
 
     if distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(
-            train_dataset, drop_last=True)
-        test_sampler = torch.utils.data.distributed.DistributedSampler(
-            test_dataset)
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset,
+                                                                        drop_last=True)
+        test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset)
     else:
         train_sampler = torch.utils.data.RandomSampler(train_dataset)
         test_sampler = torch.utils.data.SequentialSampler(test_dataset)
 
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=config.DATALOADER.BATCH_SIZE,
-        sampler=train_sampler,
-        num_workers=config.DATALOADER.NUM_WORKERS)
-    test_loader = torch.utils.data.DataLoader(
-        test_dataset,
-        batch_size=config.DATALOADER.BATCH_SIZE,
-        sampler=test_sampler,
-        num_workers=config.DATALOADER.NUM_WORKERS)
+    train_loader = torch.utils.data.DataLoader(train_dataset,
+                                               batch_size=config.DATALOADER.BATCH_SIZE,
+                                               sampler=train_sampler,
+                                               num_workers=config.DATALOADER.NUM_WORKERS)
+    test_loader = torch.utils.data.DataLoader(test_dataset,
+                                              batch_size=config.DATALOADER.BATCH_SIZE,
+                                              sampler=test_sampler,
+                                              num_workers=config.DATALOADER.NUM_WORKERS)
     return train_loader, test_loader
 
 
@@ -95,15 +96,15 @@ def train_model(model, train_loader, test_loader, args):
         torch.distributed.init_process_group(backend='nccl')
 
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    optimizer = torch.optim.SGD(
-        model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.97)
     loss_func = nn.CrossEntropyLoss().to(device)
 
     if distributed:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
-        model = torch.nn.parallel.DistributedDataParallel(
-            model, device_ids=[args.local_rank], output_device=args.local_rank)
+        model = torch.nn.parallel.DistributedDataParallel(model,
+                                                          device_ids=[args.local_rank],
+                                                          output_device=args.local_rank)
     else:
         model.to(device)
 
@@ -152,8 +153,9 @@ def prune_model(model):
         plan = DG.get_pruning_plan(conv, tp.prune_conv, pruning_index)
         plan.exec()
 
-    block_prune_probs = [0.1, 0.1, 0.1, 0.2, 0.2, 0.2,
-                         0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.3, 0.3, 0.3]
+    block_prune_probs = [
+        0.1, 0.1, 0.1, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.3, 0.3, 0.3
+    ]
     blk_id = 0
     for m in model.modules():
         if isinstance(m, resnet.BasicBlock):
@@ -172,21 +174,20 @@ def main():
         model = ResNet34(num_classes=10)
         train_model(model, train_loader, test_loader, args)
     elif args.mode == 'prune':
-        previous_ckpt = 'ResNet34-round%d.pth' % (args.round-1)
-        print("Pruning round %d, load model from %s" %
-              (args.round, previous_ckpt))
+        previous_ckpt = 'ResNet34-round%d.pth' % (args.round - 1)
+        print("Pruning round %d, load model from %s" % (args.round, previous_ckpt))
         model = torch.load(previous_ckpt)
         prune_model(model)
         print(model)
         params = sum([np.prod(p.size()) for p in model.parameters()])
-        print("Number of Parameters: %.1fM" % (params/1e6))
+        print("Number of Parameters: %.1fM" % (params / 1e6))
         # train_model(model, train_loader, test_loader)
     elif args.mode == 'test':
         ckpt = 'ResNet34-round%d.pth' % (args.round)
         print("Load model from %s" % (ckpt))
         model = torch.load(ckpt)
         params = sum([np.prod(p.size()) for p in model.parameters()])
-        print("Number of Parameters: %.1fM" % (params/1e6))
+        print("Number of Parameters: %.1fM" % (params / 1e6))
         acc = eval(model, test_loader)
         print("Acc=%.4f\n" % (acc))
 

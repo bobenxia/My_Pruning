@@ -10,7 +10,6 @@ from torchvision.models.resnet import resnet50
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
-
 ### Deprecated Method ###
 # def measure_inference_time(model, input, repeat=100):
 #     starter, ender = torch.cuda.Event(
@@ -41,7 +40,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 #     return mean_syn
 
 
-def get_cpu_gpu_time_in_inference(model: nn.Module, input: Tensor, gpu_id: int = 0) -> Tuple[float, float]:
+def get_cpu_gpu_time_in_inference(model: nn.Module,
+                                  input: Tensor,
+                                  gpu_id: int = 0) -> Tuple[float, float]:
     """gpu_id: the gpu used for model inference, default is 0.
 
     return: cpu time(us) and gpu time(us).
@@ -54,7 +55,9 @@ def get_cpu_gpu_time_in_inference(model: nn.Module, input: Tensor, gpu_id: int =
     for _ in range(10):
         _ = model(input)
 
-    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], profile_memory=True, record_shapes=True) as prof:
+    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                 profile_memory=True,
+                 record_shapes=True) as prof:
         with record_function("model_inference"):
             _ = model(input)
 

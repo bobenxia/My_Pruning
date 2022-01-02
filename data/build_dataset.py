@@ -5,8 +5,7 @@ import torch
 import torchvision
 from torchvision.transforms.functional import InterpolationMode
 
-from .dataprocess import (ClassificationDataProcessEval,
-                          ClassificationDataProcessTrain)
+from .dataprocess import (ClassificationDataProcessEval, ClassificationDataProcessTrain)
 
 
 def build_train_dataset_and_sampler(config, distributed):
@@ -33,11 +32,11 @@ def build_train_dataset_and_sampler(config, distributed):
         train_dir,
         preprocessing_train,
     )
-    print("Loading time: ", time.time()-st)
+    print("Loading time: ", time.time() - st)
 
     if distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(
-            dataset_train, drop_last=True)
+        train_sampler = torch.utils.data.distributed.DistributedSampler(dataset_train,
+                                                                        drop_last=True)
     else:
         train_sampler = torch.utils.data.RandomSampler(dataset_train)
 
@@ -66,11 +65,10 @@ def build_valid_dataset_and_sampler(config, distributed):
         valid_dir,
         preprocessing_valid,
     )
-    print("Loading time: ", time.time()-st)
+    print("Loading time: ", time.time() - st)
 
     if distributed:
-        test_sampler = torch.utils.data.distributed.DistributedSampler(
-            dataset_valid)
+        test_sampler = torch.utils.data.distributed.DistributedSampler(dataset_valid)
     else:
         test_sampler = torch.utils.data.SequentialSampler(dataset_valid)
 
