@@ -19,10 +19,12 @@ def get_model_macs_and_params(model: nn.Module,
 
     macs, params = get_model_complexity_info(model,
                                              image_size,
-                                             as_strings=True,
+                                             as_strings=False,
                                              print_per_layer_stat=False,
-                                             verbose=True)
-    return macs, params
+                                             verbose=False)
+    G_macs = round(macs / 10.**9, 3)
+    M_params = round(params / 10.**6, 3)
+    return G_macs, M_params
 
 
 if __name__ == "__main__":

@@ -64,7 +64,13 @@ def get_cpu_gpu_time_in_inference(model: nn.Module,
     key_av = prof.key_averages()
     for i in range(len(key_av)):
         if 'model_inference' in key_av[i].key:
-            return key_av[i].cpu_time_total, key_av[i].cuda_time_total
+            cpu_time = key_av[i].cpu_time_total
+            gpu_time = key_av[i].cuda_time_total
+            break
+
+    M_cpu_time = round(cpu_time / 10.**3, 3)
+    M_gpu_time = round(gpu_time / 10.**3, 3)
+    return M_cpu_time, M_gpu_time
 
 
 if __name__ == "__main__":
