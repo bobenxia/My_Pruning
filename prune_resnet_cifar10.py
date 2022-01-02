@@ -1,16 +1,22 @@
-from model.cifar.resnet import ResNet34
-import torch_pruning as tp
-import model.cifar.resnet as resnet
-from torchvision.datasets import CIFAR10
-from torchvision import transforms
-from torch.utils.tensorboard import SummaryWriter
-import torch.nn.functional as F
-import torch.nn as nn
-import torch
-import numpy as np
 import argparse
 import os
 import sys
+
+import numpy as np
+import torch
+import torch.backends.cudnn as cudnn
+import torch.distributed as dist
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.tensorboard import SummaryWriter
+from torchvision import transforms
+from torchvision.datasets import CIFAR10
+
+import model.cifar.resnet as resnet
+import torch_pruning as tp
+from config.default_config import _C as config
+from model.cifar.resnet import ResNet34
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
@@ -20,26 +26,41 @@ parser.add_argument('--mode', type=str, required=True,
                     choices=['train', 'prune', 'test'])
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--verbose', action='store_true', default=False)
-parser.add_argument('--total_epochs', type=int, default=60)
+parser.add_argument('--total_epochs', type=int, default=20)
 parser.add_argument('--step_size', type=int, default=70)
 parser.add_argument('--round', type=int, default=1)
 parser.add_argument("--local_rank", default=-1, type=int)
 
-args = parser.parse_args()
-local_rank = args.local_rank
 
+def get_dataloader(distributed):
+    train_dataset = CIFAR10('/data/xiazheng/', train=True, transform=transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+    ]), download=True)
+    test_dataset = CIFAR10('/data/xiazheng/', train=False, transform=transforms.Compose([
+        transforms.ToTensor(),
+    ]), download=True)
 
-def get_dataloader():
+    if distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(
+            train_dataset, drop_last=True)
+        test_sampler = torch.utils.data.distributed.DistributedSampler(
+            test_dataset)
+    else:
+        train_sampler = torch.utils.data.RandomSampler(train_dataset)
+        test_sampler = torch.utils.data.SequentialSampler(test_dataset)
+
     train_loader = torch.utils.data.DataLoader(
-        CIFAR10('/data/xiazheng/', train=True, transform=transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-        ]), download=True), batch_size=args.batch_size, num_workers=2)
+        train_dataset,
+        batch_size=config.DATALOADER.BATCH_SIZE,
+        sampler=train_sampler,
+        num_workers=config.DATALOADER.NUM_WORKERS)
     test_loader = torch.utils.data.DataLoader(
-        CIFAR10('/data/xiazheng/', train=False, transform=transforms.Compose([
-            transforms.ToTensor(),
-        ]), download=True), batch_size=args.batch_size, num_workers=2)
+        test_dataset,
+        batch_size=config.DATALOADER.BATCH_SIZE,
+        sampler=test_sampler,
+        num_workers=config.DATALOADER.NUM_WORKERS)
     return train_loader, test_loader
 
 
@@ -60,22 +81,31 @@ def eval(model, test_loader):
     return correct / total
 
 
-def train_model(model, train_loader, test_loader):
-    import torch.distributed as dist
-    from torch.nn.parallel import DistributedDataParallel as DDP
-
+def train_model(model, train_loader, test_loader, args):
+    # cudnn related setting
+    cudnn.benchmark = config.CUDNN.BENCHMARK
+    cudnn.deterministic = config.CUDNN.DETERMINISTIC
+    cudnn.enabled = config.CUDNN.ENABLED
+    gpus = list(config.GPUS)
+    distributed = len(gpus) > 1
+    device = torch.device(f'cuda:{args.local_rank}')
     # DDP：DDP backend初始化
-    torch.cuda.set_device(local_rank)
-    dist.init_process_group(backend='nccl')  # nccl是GPU设备上最快、最推荐的后端
+    if distributed:
+        torch.cuda.set_device(args.local_rank)
+        torch.distributed.init_process_group(backend='nccl')
 
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     optimizer = torch.optim.SGD(
-        model.parameters(), lr=0.1, momentum=0.9, weight_decay=1e-4)
+        model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.97)
-    loss_func = nn.CrossEntropyLoss().to(local_rank)
-    model.to(local_rank)
-    # DDP: 构造DDP model
-    model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+    loss_func = nn.CrossEntropyLoss().to(device)
+
+    if distributed:
+        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
+        model = torch.nn.parallel.DistributedDataParallel(
+            model, device_ids=[args.local_rank], output_device=args.local_rank)
+    else:
+        model.to(device)
 
     best_acc = -1
 
@@ -85,7 +115,7 @@ def train_model(model, train_loader, test_loader):
     for epoch in range(args.total_epochs):
         model.train()
         for i, (img, target) in enumerate(train_loader):
-            img, target = img.to(local_rank), target.to(local_rank)
+            img, target = img.to(device), target.to(device)
             optimizer.zero_grad()
             out = model(img)
             loss = loss_func(out, target)
@@ -134,11 +164,13 @@ def prune_model(model):
 
 
 def main():
+    args = parser.parse_args()
+    local_rank = args.local_rank
     train_loader, test_loader = get_dataloader()
     if args.mode == 'train':
         args.round = 0
         model = ResNet34(num_classes=10)
-        train_model(model, train_loader, test_loader)
+        train_model(model, train_loader, test_loader, args)
     elif args.mode == 'prune':
         previous_ckpt = 'ResNet34-round%d.pth' % (args.round-1)
         print("Pruning round %d, load model from %s" %
