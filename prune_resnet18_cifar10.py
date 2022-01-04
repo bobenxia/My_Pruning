@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchprof
+from torch.utils.data import DataLoader
 from torchinfo import summary
 from torchvision import transforms
 from torchvision.datasets import CIFAR10
@@ -14,8 +14,8 @@ from torchvision.datasets import CIFAR10
 import model.cifar.resnet as resnet
 import torch_pruning as tp
 from model.cifar.resnet import ResNet18
-from tools.inference_time import (count_params, get_cpu_gpu_time_in_inference,
-                                  measure_inference_time)
+from tools.print_model_info import get_model_infor_and_print
+from tools.write_excel import read_excel_and_write
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
@@ -29,27 +29,28 @@ parser.add_argument("--local_rank", default=-1, type=int)
 
 args = parser.parse_args()
 local_rank = args.local_rank
+block_prune_probs = [0.5] * 8
 
 
 def get_dataloader():
-    train_loader = torch.utils.data.DataLoader(CIFAR10('/data/xiazheng/',
-                                                       train=True,
-                                                       transform=transforms.Compose([
-                                                           transforms.RandomCrop(32, padding=4),
-                                                           transforms.RandomHorizontalFlip(),
-                                                           transforms.ToTensor(),
-                                                       ]),
-                                                       download=True),
-                                               batch_size=args.batch_size,
-                                               num_workers=2)
-    test_loader = torch.utils.data.DataLoader(CIFAR10('/data/xiazheng/',
-                                                      train=False,
-                                                      transform=transforms.Compose([
-                                                          transforms.ToTensor(),
-                                                      ]),
-                                                      download=True),
-                                              batch_size=args.batch_size,
-                                              num_workers=2)
+    train_loader = DataLoader(CIFAR10('/data/xiazheng/',
+                                      train=True,
+                                      transform=transforms.Compose([
+                                          transforms.RandomCrop(32, padding=4),
+                                          transforms.RandomHorizontalFlip(),
+                                          transforms.ToTensor(),
+                                      ]),
+                                      download=True),
+                              batch_size=args.batch_size,
+                              num_workers=2)
+    test_loader = DataLoader(CIFAR10('/data/xiazheng/',
+                                     train=False,
+                                     transform=transforms.Compose([
+                                         transforms.ToTensor(),
+                                     ]),
+                                     download=True),
+                             batch_size=args.batch_size,
+                             num_workers=2)
     return train_loader, test_loader
 
 
@@ -129,7 +130,6 @@ def prune_model(model):
         plan = DG.get_pruning_plan(conv, tp.prune_conv, pruning_index)
         plan.exec()
 
-    block_prune_probs = [0.1, 0.1, 0.2, 0.2, 0.2, 0.2, 0.3, 0.3]
     blk_id = 0
     for m in model.modules():
         if isinstance(m, resnet.BasicBlock):
@@ -152,40 +152,25 @@ def main():
         previous_ckpt = 'save/train_and_prune/ResNet18-round%d.pth' % (args.round - 1)
         print("Pruning round %d, load model from %s" % (args.round, previous_ckpt))
         model = torch.load(previous_ckpt)
-        params = sum([np.prod(p.size()) for p in model.parameters()])
-        print("Number of Parameters: %.1fM" % (params / 1e6))
         prune_model(model)
-        # print(model)
-        params = sum([np.prod(p.size()) for p in model.parameters()])
-        print("Number of Parameters: %.1fM" % (params / 1e6))
         torch.save(model, 'save/train_and_prune/ResNet18-round%d.pth' % (args.round))
-        # train_model(model, train_loader, test_loader)
     elif args.mode == 'test':
         ckpt = 'save/train_and_prune/ResNet18-round%d.pth' % (args.round)
-        # ckpt = 'save/train_and_prune/ResNet18-round0-cp.pth'
-        print("Load model from %s" % (ckpt))
-        model = torch.load(ckpt)
-        params = sum([np.prod(p.size()) for p in model.parameters()])
-        print("Number of Parameters: %.1fM" % (params / 1e6))
-        acc = eval(model, test_loader)
-        print("Acc=%.4f\n" % (acc))
+        # ckpt = 'save/train_and_prune/ResNet18-pruned-1-1-2-2-2-2-3-3.pth'
 
-        device = torch.device('cuda')
-        fake_input = torch.randn(1, 3, 32, 32).to(device)
-        model = model.to(device)
+        fake_input = torch.randn(1, 3, 32, 32)
+        # need load model to cpu, avoid computing model GPU memory errors
+        model = torch.load(ckpt, map_location=lambda storage, loc: storage)
+        model_infor = get_model_infor_and_print(model, fake_input, 0)
 
-        cpu_time, gpu_time = get_cpu_gpu_time_in_inference(model, fake_input)
-        print("before pruning: inference time=%f s, parameters=%.1fM" %
-              (inference_time_before_pruning, count_params(model) / 1e6))
-        # inference_time_before_pruning = measure_inference_time(model, fake_input, repeat)
-        # with torchprof.Profile(model, use_cuda=True) as prof:
-        #     _ = model(fake_input)
-        # print(prof.display(show_events=False))
-        # summary(model, (1,3,32,32))
-        # with torch.autograd.profiler.profile(enabled=True, use_cuda=True, record_shapes=True, profile_memory=False,use_cpu=False, use_kineto=True) as prof:
-        #     _ = model(fake_input)
-        # print(prof.table())
-        # print("before pruning: inference time=%f s, parameters=%.1fM"%(inference_time_before_pruning, count_params(model)/1e6))
+        model_infor['Model'] = 'resnet-18'
+        model_infor['Top1-acc(%)'] = eval(model, test_loader)
+        model_infor['Top5-acc(%)'] = ' '
+        model_infor['If_base'] = 'False'
+        model_infor['Strategy'] = f'{block_prune_probs}'
+
+        excel_path = "model_data.xlsx"
+        read_excel_and_write(excel_path, model_infor)
 
 
 if __name__ == '__main__':

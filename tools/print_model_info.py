@@ -2,12 +2,22 @@ import torch
 import torch.nn as nn
 from torch.functional import Tensor
 
-from inference_time import get_cpu_gpu_time_in_inference
+from tools.inference_time import get_cpu_gpu_time_in_inference
 from tools.macs_and_params import get_model_macs_and_params
 from tools.model_memory import get_model_gpu_mem
 
 
-def get_model_info_and_print(model: nn.Module, input: Tensor, gpu_id: int = 0) -> None:
+def get_model_infor_and_print(model: nn.Module, input: Tensor, gpu_id: int = 0) -> list:
+    """
+    return :
+    {
+        'G_Mac': Macs,
+        'M_params': params,
+        'ms_cpu_time': cpu_time,
+        'ms_gpu_time': gpu_time,
+        'M_gpu_mem': gpu_mem
+    }
+    """
     # torch.cuda.set_device(gpu_id)
     # model = model.cuda()
     # input = input.cuda()
@@ -23,6 +33,14 @@ def get_model_info_and_print(model: nn.Module, input: Tensor, gpu_id: int = 0) -
     print('{:<30}  {:>12} ms'.format('Gpu time: ', gpu_time))
     print("{:<30}  {:>12} M".format('GPU Mem Used:', gpu_mem))
 
+    return {
+        'G_Mac': Macs,
+        'M_params': params,
+        'ms_cpu_time': cpu_time,
+        'ms_gpu_time': gpu_time,
+        'M_gpu_mem': gpu_mem
+    }
+
 
 if __name__ == "__main__":
     import torchvision.models as models
@@ -30,4 +48,6 @@ if __name__ == "__main__":
     data = torch.randn(1, 3, 224, 224)
     gpu_id = 4
 
-    get_model_info_and_print(model, data, gpu_id)
+    model_infor = get_model_infor_and_print(model, data, gpu_id)
+    print(model_infor)
+

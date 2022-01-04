@@ -13,6 +13,8 @@ from torchvision.datasets import CIFAR10
 import model.cifar.resnet as resnet
 import torch_pruning as tp
 from model.cifar.resnet import ResNet34
+from tools.print_model_info import get_model_infor_and_print
+from tools.write_excel import read_excel_and_write
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
@@ -27,6 +29,7 @@ parser.add_argument("--local_rank", default=-1, type=int)
 
 args = parser.parse_args()
 local_rank = args.local_rank
+block_prune_probs = [0.5] * 16
 
 
 def get_dataloader():
@@ -129,9 +132,6 @@ def prune_model(model):
         plan = DG.get_pruning_plan(conv, tp.prune_conv, pruning_index)
         plan.exec()
 
-    block_prune_probs = [
-        0.1, 0.1, 0.1, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.3, 0.3, 0.3
-    ]
     blk_id = 0
     for m in model.modules():
         if isinstance(m, resnet.BasicBlock):
@@ -148,22 +148,29 @@ def main():
         model = ResNet34(num_classes=10)
         train_model(model, train_loader, test_loader)
     elif args.mode == 'prune':
-        previous_ckpt = 'ResNet34-round%d.pth' % (args.round - 1)
+        previous_ckpt = 'save/train_and_prune/ResNet34-round%d.pth' % (args.round - 1)
         print("Pruning round %d, load model from %s" % (args.round, previous_ckpt))
         model = torch.load(previous_ckpt)
         prune_model(model)
-        print(model)
-        params = sum([np.prod(p.size()) for p in model.parameters()])
-        print("Number of Parameters: %.1fM" % (params / 1e6))
-        # train_model(model, train_loader, test_loader)
+        torch.save(model, 'save/train_and_prune/ResNet34-round%d.pth' % (args.round))
     elif args.mode == 'test':
-        ckpt = 'ResNet34-round%d.pth' % (args.round)
+        ckpt = 'save/train_and_prune/ResNet34-round%d.pth' % (args.round)
         print("Load model from %s" % (ckpt))
-        model = torch.load(ckpt)
-        params = sum([np.prod(p.size()) for p in model.parameters()])
-        print("Number of Parameters: %.1fM" % (params / 1e6))
-        acc = eval(model, test_loader)
-        print("Acc=%.4f\n" % (acc))
+
+        fake_input = torch.randn(1, 3, 32, 32)
+        # need load model to cpu, avoid computing model GPU memory errors
+        model = torch.load(ckpt, map_location=lambda storage, loc: storage)
+        model_infor = get_model_infor_and_print(model, fake_input, 0)
+
+        model_infor['Model'] = 'resnet-34'
+        model_infor['Top1-acc(%)'] = eval(model, test_loader)
+        model_infor['Top5-acc(%)'] = ' '
+        model_infor['If_base'] = 'False'
+        model_infor['Strategy'] = f'{block_prune_probs}' if model_infor['If_base'] == 'False' else ' '
+        print(model_infor)
+
+        excel_path = "model_data.xlsx"
+        read_excel_and_write(excel_path, model_infor)
 
 
 if __name__ == '__main__':

@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchprof
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 from torchvision.datasets import CIFAR10
@@ -14,15 +14,13 @@ from torchvision.datasets import CIFAR10
 import model.cifar.resnet as resnet
 import torch_pruning as tp
 from model.cifar.resnet import ResNet101
-from tools.inference_time import count_params, measure_inference_time
+from tools.print_model_info import get_model_infor_and_print
+from tools.write_excel import read_excel_and_write
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--mode',
-                    type=str,
-                    default='test',
-                    choices=['train', 'prune', 'test', 'finetune'])
+parser.add_argument('--mode', type=str, default='test', choices=['train', 'prune', 'test', 'finetune'])
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--verbose', action='store_true', default=False)
 parser.add_argument('--total_epochs', type=int, default=30)
@@ -32,27 +30,28 @@ parser.add_argument("--local_rank", default=-1, type=int)
 
 args = parser.parse_args()
 local_rank = args.local_rank
+block_prune_probs = [0.5] * 33
 
 
 def get_dataloader():
-    train_loader = torch.utils.data.DataLoader(CIFAR10('/data/xiazheng/',
-                                                       train=True,
-                                                       transform=transforms.Compose([
-                                                           transforms.RandomCrop(32, padding=4),
-                                                           transforms.RandomHorizontalFlip(),
-                                                           transforms.ToTensor(),
-                                                       ]),
-                                                       download=True),
-                                               batch_size=args.batch_size,
-                                               num_workers=2)
-    test_loader = torch.utils.data.DataLoader(CIFAR10('/data/xiazheng/',
-                                                      train=False,
-                                                      transform=transforms.Compose([
-                                                          transforms.ToTensor(),
-                                                      ]),
-                                                      download=True),
-                                              batch_size=args.batch_size,
-                                              num_workers=2)
+    train_loader = DataLoader(CIFAR10('/data/xiazheng/',
+                                      train=True,
+                                      transform=transforms.Compose([
+                                          transforms.RandomCrop(32, padding=4),
+                                          transforms.RandomHorizontalFlip(),
+                                          transforms.ToTensor(),
+                                      ]),
+                                      download=True),
+                              batch_size=args.batch_size,
+                              num_workers=2)
+    test_loader = DataLoader(CIFAR10('/data/xiazheng/',
+                                     train=False,
+                                     transform=transforms.Compose([
+                                         transforms.ToTensor(),
+                                     ]),
+                                     download=True),
+                             batch_size=args.batch_size,
+                             num_workers=2)
     return train_loader, test_loader
 
 
@@ -137,10 +136,6 @@ def prune_model(model):
         plan = DG.get_pruning_plan(conv, tp.prune_conv, pruning_index)
         plan.exec()
 
-    block_prune_probs = [
-        0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5,
-        0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5
-    ]
     blk_id = 0
     for m in model.modules():
         if isinstance(m, resnet.Bottleneck):
@@ -157,19 +152,13 @@ def main():
     if args.mode == 'train':
         args.round = 0
         model = ResNet101(num_classes=10)
-        train_model(model,
-                    train_loader,
-                    test_loader,
-                    summary_writer="./runs/prune_resnet101_cifar10.log")
+        train_model(model, train_loader, test_loader, summary_writer="./runs/prune_resnet101_cifar10.log")
     elif args.mode == 'prune':
         previous_ckpt = 'save/train_and_prune/ResNet101-round%d.pth' % (args.round - 1)
         print("Pruning round %d, load model from %s" % (args.round, previous_ckpt))
         model = torch.load(previous_ckpt)
-        params = sum([np.prod(p.size()) for p in model.parameters()])
-        print("Number of Parameters before prune: %.1fM" % (params / 1e6))
         prune_model(model)
-        params = sum([np.prod(p.size()) for p in model.parameters()])
-        print("Number of Parameters after prune: %.1fM" % (params / 1e6))
+        torch.save(model, 'save/train_and_prune/ResNet101-round%d.pth' % (args.round))
     elif args.mode == 'finetune':
         previous_ckpt = 'save/train_and_prune/ResNet101-round%d.pth' % (args.round)
         print("Finetune round %d, load model from %s" % (args.round, previous_ckpt))
@@ -181,59 +170,22 @@ def main():
                     name='finetune')
     elif args.mode == 'test':
         ckpt = 'save/train_and_prune/ResNet101-round%d.pth' % (args.round)
-        # ckpt = 'save/train_and_prune/ResNet101-round1-finetune.pth'
         print("Load model from %s" % (ckpt))
-        model = torch.load(ckpt)
-        params = sum([np.prod(p.size()) for p in model.parameters()])
-        print("Number of Parameters: %.1fM" % (params / 1e6))
-        acc = eval(model, test_loader)
-        print("Acc=%.4f\n" % (acc))
 
-        repeat = 1000
-        device = torch.device('cuda')
-        fake_input = torch.randn(1, 3, 32, 32).to(device)
-        model = model.to(device)
+        fake_input = torch.randn(1, 3, 32, 32)
+        # need load model to cpu, avoid computing model GPU memory errors
+        model = torch.load(ckpt, map_location=lambda storage, loc: storage)
+        model_infor = get_model_infor_and_print(model, fake_input, 0)
 
-        # method 1
-        inference_time_before_pruning = measure_inference_time(model, fake_input, repeat)
-        # print("inference time=%f s, parameters=%.1fM" %
-        #       (inference_time_before_pruning, count_params(model)/1e6))
+        model_infor['Model'] = 'resnet-101'
+        model_infor['Top1-acc(%)'] = eval(model, test_loader)
+        model_infor['Top5-acc(%)'] = ' '
+        model_infor['If_base'] = 'False'
+        model_infor['Strategy'] = f'{block_prune_probs}' if model_infor['If_base'] == 'False' else ' '
+        print(model_infor)
 
-        # method 2
-        # with torch.autograd.profiler.profile(enabled=True, use_cuda=True, record_shapes=True, profile_memory=False,use_cpu=False, use_kineto=True) as prof:
-        # with torch.autograd.profiler.profile(enabled=True, use_cuda=True, record_shapes=False, profile_memory=False) as prof:
-        #     _ = model(fake_input)
-        # print(prof.table())
-
-        # method 3
-        # with torchprof.Profile(model, use_cuda=True) as prof:
-        #     _ = model(fake_input)
-        # print(prof.display(show_events=True))
-        # print(prof.display(show_events=True))
-        # trace, event_lists_dict = prof.raw()
-        # print(event_lists_dict[trace[1].path][0])
-        # conv1 = event_lists_dict[trace[1].path][0]
-        # print(conv1[0])
-        # print(conv1[0].cuda_time)
-
-        # method 4
-        # from torch.profiler import profile, record_function, ProfilerActivity
-        # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], profile_memory=True, record_shapes=True, with_stack=True) as prof:
-        #     with record_function("model_inference"):
-        #         _ = model(fake_input)
-        # key_av = prof.key_averages()
-        # for i in range(len(key_av)):
-        #     if 'model_inference' in key_av[i].key:
-        #         key = key_av[i].key
-        #         print('cuda time total:', key_av[i].cuda_time_total_str)
-        #         print('cpu time tital:', key_av[i].cpu_time_total_str)
-        #         print('cuda memory usage:', key_av[i].cuda_memory_usage)
-        # print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
-        # print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-        # print(prof.key_averages().table(sort_by="self_cuda_memory_usage", row_limit=10))
-        # print(prof.key_averages().table(sort_by="cuda_memory_usage", row_limit=10))
-        # prof.export_chrome_trace("trace.json")
-        # prof.export_stacks("profiler_stacks.txt", "self_cuda_time_total")
+        excel_path = "model_data.xlsx"
+        read_excel_and_write(excel_path, model_infor)
 
 
 if __name__ == '__main__':
