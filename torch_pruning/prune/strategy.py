@@ -1,22 +1,28 @@
-import torch
-from abc import abstractclassmethod, ABC
-from typing import Sequence
 import random
 import warnings
+from abc import ABC, abstractclassmethod
+from typing import Sequence
+
+import numpy as np
+import torch
+from sklearn.cluster import KMeans
+from sklearn.metrics import pairwise_distances_argmin_min
+
 
 # https://github.com/VainF/Torch-Pruning/issues/49 by @Serjio42
 def round_pruning_amount(total_parameters, n_to_prune, round_to):
     """round the parameter amount after pruning to an integer multiple of `round_to`.
     """
-    n_remain = round_to*max(int(total_parameters - n_to_prune)//round_to, 1)
+    n_remain = round_to * max(int(total_parameters - n_to_prune) // round_to, 1)
     return max(total_parameters - n_remain, 0)
+
 
 class BaseStrategy(ABC):
     def __call__(self, *args, **kwargs):
         return self.apply(*args, **kwargs)
 
     @abstractclassmethod
-    def apply(self, weights, amount=0.0, round_to=1)->  Sequence[int]:  # return index
+    def apply(self, weights, amount=0.0, round_to=1) -> Sequence[int]:  # return index
         """ Apply the strategy on weights with user specified pruning percentage.
 
         Parameters:
@@ -26,37 +32,64 @@ class BaseStrategy(ABC):
         """
         raise NotImplementedError
 
-class RandomStrategy(BaseStrategy):
 
-    def apply(self, weights, amount=0.0, round_to=1)->  Sequence[int]:  # return index
-        if amount<=0: return []
+class RandomStrategy(BaseStrategy):
+    def apply(self, weights, amount=0.0, round_to=1) -> Sequence[int]:  # return index
+        if amount <= 0: return []
         n = len(weights)
-        n_to_prune = int(amount*n) if amount<1.0 else amount
+        n_to_prune = int(amount * n) if amount < 1.0 else amount
         n_to_prune = round_pruning_amount(n, n_to_prune, round_to)
         if n_to_prune == 0: return []
-        indices = random.sample( list( range(n) ), k=n_to_prune )
+        indices = random.sample(list(range(n)), k=n_to_prune)
         return indices
+
 
 class LNStrategy(BaseStrategy):
     def __init__(self, p):
         self.p = p
 
-    def apply(self, weights, amount=0.0, round_to=1)->  Sequence[int]:  # return index
-        if amount<=0: return []
+    def apply(self, weights, amount=0.0, round_to=1) -> Sequence[int]:  # return index
+        if amount <= 0: return []
         n = len(weights)
-        l1_norm = torch.norm( weights.view(n, -1), p=self.p, dim=1 )
-        n_to_prune = int(amount*n) if amount<1.0 else amount 
+        l1_norm = torch.norm(weights.view(n, -1), p=self.p, dim=1)
+        n_to_prune = int(amount * n) if amount < 1.0 else amount
         n_to_prune = round_pruning_amount(n, n_to_prune, round_to)
         print(f"Origin number is {n}, number to prune is {n_to_prune}")
         if n_to_prune == 0: return []
-        threshold = torch.kthvalue(l1_norm, k=n_to_prune).values 
+        threshold = torch.kthvalue(l1_norm, k=n_to_prune).values
         indices = torch.nonzero(l1_norm <= threshold).view(-1).tolist()
         return indices
+
 
 class L1Strategy(LNStrategy):
     def __init__(self):
         super(L1Strategy, self).__init__(p=1)
 
+
 class L2Strategy(LNStrategy):
     def __init__(self):
         super(L2Strategy, self).__init__(p=2)
+
+
+def cluster_by_kmeans(weights, num_cluster):
+    weights = weights.detach().cpu().numpy()
+    x = np.reshape(weights, (weights.shape[0], -1))  # n, c*h*w
+    if num_cluster == x.shape[0]:  # if num_cluster == n, result = [0, 1, ..., n]
+        result = [[i] for i in range(num_cluster)]
+        return result
+    km = KMeans(n_clusters=num_cluster)  # use sklearn.cluster.KMeans to cluster weights
+    km.fit(x)
+
+    closest, _ = pairwise_distances_argmin_min(km.cluster_centers_, x)
+    result = sorted(list(set(range(weights.shape[0])) - set(closest)))
+    return result
+
+
+class GSGDStrategy(BaseStrategy):
+    def apply(self, weights, amount=0.0, round_to=1) -> Sequence[int]:  # return index
+        if amount <= 0: return []
+        n = len(weights)
+        n_to_prune = int(amount * n) if amount < 1.0 else amount
+        indices = cluster_by_kmeans(weights, n-n_to_prune)
+
+        return indices

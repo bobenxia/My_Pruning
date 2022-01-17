@@ -26,11 +26,12 @@ parser.add_argument('--verbose', action='store_true', default=False)
 parser.add_argument('--total_epochs', type=int, default=30)
 parser.add_argument('--step_size', type=int, default=30)
 parser.add_argument('--round', type=int, default=1)
+parser.add_argument('--pruned_per', type=float, default=0.125)
 parser.add_argument("--local_rank", default=-1, type=int)
 
 args = parser.parse_args()
 local_rank = args.local_rank
-block_prune_probs = [0.5] * 16
+block_prune_probs = [args.pruned_per] * 16
 
 
 def get_dataloader():
@@ -130,7 +131,9 @@ def prune_model(model):
         #num_pruned = int(out_channels * pruned_prob)
         # pruning_index = np.argsort(L1_norm)[:num_pruned].tolist() # remove filters with small L1-Norm
         strategy = tp.strategy.L1Strategy()
+        strategy = tp.strategy.GSGDStrategy()
         pruning_index = strategy(conv.weight, amount=amount)
+        print(amount, len(pruning_index))
         plan = DG.get_pruning_plan(conv, tp.prune_conv, pruning_index)
         plan.exec()
 
@@ -173,7 +176,7 @@ def main():
         model_infor['Top1-acc(%)'] = eval(model, test_loader)
         model_infor['Top5-acc(%)'] = ' '
         model_infor['If_base'] = 'False'
-        model_infor['Strategy'] = f'{block_prune_probs}' if model_infor['If_base'] == 'False' else ' '
+        model_infor['Strategy'] = f'CSGD+{block_prune_probs}' if model_infor['If_base'] == 'False' else ' '
         print(model_infor)
 
         excel_path = "model_data.xlsx"
