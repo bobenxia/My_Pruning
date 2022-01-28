@@ -84,3 +84,101 @@ def generate_merge_matrix_for_kernel(deps, layer_idx_to_clusters, kernel_namedva
         # 这样每层都能得到一个 聚类后id 的 matrix
         # 这个 matrix 是为了加快计算用的
     return result
+
+#   Recently it is popular to cancel weight decay on vecs
+def generate_decay_matrix_for_kernel_and_vecs(deps, layer_idx_to_clusters, kernel_namedvalue_list,
+                                              weight_decay, weight_decay_bias, centri_strength):
+    # weight_decay_bias 现在不用了，一般设置为0
+    # centri_strength 是人为设置的超参，控制组内的点聚集的速度
+    result = {}
+    #   for the kernel
+    for layer_idx, clusters in layer_idx_to_clusters.items():
+        num_filters = deps[layer_idx]
+        decay_trans_mat = np.zeros((num_filters, num_filters), dtype=np.float32)
+        for clst in clusters:
+            sc = sorted(clst)
+            for ee in sc:
+                decay_trans_mat[ee, ee] = weight_decay + centri_strength
+                for p in sc:
+                    decay_trans_mat[ee, p] += -centri_strength / len(clst)
+        kernel_mat = torch.from_numpy(decay_trans_mat).cuda()
+        result[kernel_namedvalue_list[layer_idx].name] = kernel_mat
+
+    #   for the vec params (bias, beta and gamma), we use 0.1 * centripetal strength
+    for layer_idx, clusters in layer_idx_to_clusters.items():
+        num_filters = deps[layer_idx]
+        decay_trans_mat = np.zeros((num_filters, num_filters), dtype=np.float32)
+        for clst in clusters:
+            sc = sorted(clst)
+            for ee in sc:
+                # Note: using smaller centripetal strength on the scaling factor of BN improve the performance in some of the cases
+                decay_trans_mat[ee, ee] = weight_decay_bias + centri_strength * 0.1
+                for p in sc:
+                    decay_trans_mat[ee, p] += -centri_strength * 0.1 / len(clst)
+        vec_mat = torch.from_numpy(decay_trans_mat).cuda()
+        bias_name, gamma_name, beta_name = get_bias_gamma_and_beta_name(kernel_namedvalue_list[layer_idx].name)
+        result[bias_name] = vec_mat
+        result[gamma_name] = vec_mat
+        result[beta_name] = vec_mat
+
+    return result
+
+def get_bias_gamma_and_beta_name(kernel_name):
+    bias_name = kernel_name.replace('weight', 'bias')
+    if 'conv' in kernel_name:
+        gamma_name = kernel_name.replace('conv', 'bn')
+        beta_name = kernel_name.replace('conv', 'bn').replace('weight', 'bias')
+    elif 'downsample' in kernel_name:
+        gamma_name = kernel_name.replace('downsample.0', 'downsample.1')
+        beta_name = kernel_name.replace('downsample.0', 'downsample.1').replace('weight', 'bias')
+    return bias_name, gamma_name, beta_name
+
+
+def add_vecs_to_merge_mat_dicts(param_name_to_merge_matrix):
+    # 将 kernel 得到的 matrix 推广到 同一个块的 conv.bias, bn.weight, bn.bias
+    kernel_names = set(param_name_to_merge_matrix.keys())
+    for name in kernel_names:
+        # bias_name = name.replace('weight', 'bias')
+        # if 'conv' in name:
+        #     gamma_name = name.replace('conv', 'bn')
+        #     beta_name = name.replace('conv', 'bn').replace('weight', 'bias')
+        # elif 'downsample' in name:
+        #     gamma_name = name.replace('downsample.0', 'downsample.1')
+        #     beta_name = name.replace('downsample.0', 'downsample.1').replace('weight', 'bias')
+        bias_name, gamma_name, beta_name = get_bias_gamma_and_beta_name(name)
+        param_name_to_merge_matrix[bias_name] = param_name_to_merge_matrix[name]
+        param_name_to_merge_matrix[gamma_name] = param_name_to_merge_matrix[name]
+        param_name_to_merge_matrix[beta_name] = param_name_to_merge_matrix[name]
+
+
+if __name__=="__main__":
+    import torchvision
+    from utils.model_utils import ModelUtils
+    from utils.constant import RESNET50_ORIGIN_DEPS_FLATTENED
+
+
+    model = torchvision.models.resnet50(pretrained=True)
+    model_utils = ModelUtils(local_rank=0)
+    model_utils.register_state(model=model)
+    kernel_namedvalue_list = model_utils.get_all_conv_kernel_namedvalue_as_list()
+
+    clusters_save_path = './clusters_save.npy'
+    layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
+
+    print(layer_idx_to_clusters.keys())
+    param_name_to_merge_matrix = generate_merge_matrix_for_kernel(deps=RESNET50_ORIGIN_DEPS_FLATTENED,
+                                                                      layer_idx_to_clusters=layer_idx_to_clusters,
+                                                                      kernel_namedvalue_list=kernel_namedvalue_list)
+    # torch.set_printoptions(profile="full")
+    # print(param_name_to_merge_matrix['layer1.0.conv1.weight'])
+    print(param_name_to_merge_matrix.keys())
+
+    for k, v in model.state_dict().items():
+        print(k)
+
+    add_vecs_to_merge_mat_dicts(param_name_to_merge_matrix)
+    print(param_name_to_merge_matrix.keys())
+
+    for k, v in model.state_dict().items():
+        if k in param_name_to_merge_matrix.keys():
+            print(k)    
