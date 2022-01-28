@@ -233,7 +233,7 @@ def main():
     elif args.mode == 'train_with-csgd':
         args.round = 0
         model = ResNet50(num_classes=10)
-        train_with_csgd(model, train_loader, test_loader, , summary_writer="./runs/prune_resnet50_cifar10_CSGD.log"
+        train_with_csgd(model, train_loader, test_loader, summary_writer="./runs/prune_resnet50_cifar10_CSGD.log"
                         , clusters_save_path="./save/train_and_prune")
     elif args.mode == 'prune':
         previous_ckpt = 'save/train_and_prune/ResNet50-round%d.pth' % (args.round - 1)
