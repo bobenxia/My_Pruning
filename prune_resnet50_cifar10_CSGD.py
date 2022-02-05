@@ -2,14 +2,15 @@
 import argparse
 import os
 import sys
+import time
 from email.policy import default
-from django.template import Engine
 
 import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+from django.template import Engine
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -151,7 +152,39 @@ def prune_model(model):
     return model
 
 
+
+def update_net_params(net, param_name_to_merge_matrix, param_name_to_decay_matrix):
+    # C-SGD works here
+    for name, param in net.named_parameters():
+        name = name.replace('module.', '')
+        if name in param_name_to_merge_matrix:
+            p_dim = param.dim()
+            p_size = param.size()
+            if p_dim == 4:
+                param_mat = param.reshape(p_size[0], -1)
+                g_mat = param.grad.reshape(p_size[0], -1)
+            elif p_dim == 1:
+                param_mat = param.reshape(p_size[0], 1)
+                g_mat = param.grad.reshape(p_size[0], 1)
+            else:
+                assert p_dim == 2
+                param_mat = param
+                g_mat = param.grad
+            # 上面是获取当前的梯度，reshape 成 g_mat
+            # 下面是将 g_mat 按照文章中的公式，进行矩阵相乘和相加。
+            csgd_gradient = param_name_to_merge_matrix[name].matmul(g_mat) + param_name_to_decay_matrix[name].matmul(param_mat)
+            # 将计算的结果更新到参数梯度中。
+            param.grad.copy_(csgd_gradient.reshape(p_size))
+
+
 def train_with_csgd(model, train_loader, test_loader, summary_writer, clusters_save_path):
+    # deps, target_deps, schedule 是需要手动设置的
+    schedule = 0.75
+    deps = RESNET50_ORIGIN_DEPS_FLATTENED # resnet50 的 通道数量
+    target_deps = generate_itr_to_target_deps_by_schedule_vector(schedule, RESNET50_ORIGIN_DEPS_FLATTENED, RESNET50_INTERNAL_KERNEL_IDXES)
+    # pacesetter_dict 也是需要手动设置的
+    pacesetter_dict ={4: 4, 3: 4, 7: 4, 10: 4, 14: 14, 13: 14, 17: 14, 20: 14, 23: 14, 27: 27, 26: 27, 30: 27, 33: 27, 36: 27, 39: 27, 42: 27, 46: 46, 45: 46, 49: 46, 52: 46}
+
     with Engine(local_rank=local_rank) as engine:
         # ------------------------ parepare optimizer, scheduler, criterion -------
         optimizer = torch.optim.SGD(model.parameters(), lr=0.04, momentum=0.9, weight_decay=1e-4)
@@ -174,7 +207,7 @@ def train_with_csgd(model, train_loader, test_loader, summary_writer, clusters_s
         writer = SummaryWriter(summary_writer)
 
         #  ========================== prepare the clusters and matrices for  C-SGD =======================
-        kernel_namedvalue_list = get_all_conv_kernel_namedvalue_as_list()
+        kernel_namedvalue_list = engine.get_all_conv_kernel_namedvalue_as_list()
         if os.path.exists(clusters_save_path):
             layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
         else:
@@ -198,6 +231,20 @@ def train_with_csgd(model, train_loader, test_loader, summary_writer, clusters_s
                     print('sleep, waiting for process 0 to calculate clusters')
                 layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
 
+        # 根据 聚类的通道的结果，生成 matrix，方便计算
+        param_name_to_merge_matrix = generate_merge_matrix_for_kernel(deps=deps,
+                                                                      layer_idx_to_clusters=layer_idx_to_clusters,
+                                                                      kernel_namedvalue_list=kernel_namedvalue_list)
+        # 这块的功能似乎是要添加每层对于的 bias\gamma\beta 进入这个 param_name_to_merge_matrix
+        add_vecs_to_merge_mat_dicts(param_name_to_merge_matrix)
+        # core code 聚类结果的梯度计算，作为新的 weight decay
+        param_name_to_decay_matrix = generate_decay_matrix_for_kernel_and_vecs(deps=deps,
+                                                                               layer_idx_to_clusters=layer_idx_to_clusters,
+                                                                               kernel_namedvalue_list=kernel_namedvalue_list,
+                                                                               weight_decay=1e-4,
+                                                                               weight_decay_bias=0,
+                                                                               centri_strength=0.06)
+
         for epoch in range(args.total_epochs):
             model.train()
             for i, (img, target) in enumerate(train_loader):
@@ -206,6 +253,10 @@ def train_with_csgd(model, train_loader, test_loader, summary_writer, clusters_s
                 out = model(img)
                 loss = loss_func(out, target)
                 loss.backward()
+
+                # update networl params based on the CSGD
+                update_net_params(model, param_name_to_merge_matrix, param_name_to_decay_matrix)
+
                 optimizer.step()
                 if i % 10 == 0 and args.verbose:
                     print("Epoch %d/%d, iter %d/%d, loss=%.4f" %
