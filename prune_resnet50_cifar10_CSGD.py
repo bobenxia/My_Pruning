@@ -10,7 +10,6 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
-from django.template import Engine
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -27,7 +26,7 @@ from utils.model_utils import *
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--mode', type=str, required=True, choices=['train', 'prune', 'test', 'finetune'])
+parser.add_argument('--mode', type=str, required=True, choices=['train', 'prune', 'test', 'finetune', 'train_with_csgd'])
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--verbose', action='store_true', default=False)
 parser.add_argument('--total_epochs', type=int, default=30)
@@ -177,7 +176,9 @@ def update_net_params(net, param_name_to_merge_matrix, param_name_to_decay_matri
             param.grad.copy_(csgd_gradient.reshape(p_size))
 
 
-def train_with_csgd(model, train_loader, test_loader, summary_writer, clusters_save_path):
+def train_with_csgd(model, train_loader, test_loader, summary_writer, output_dir):
+    clusters_save_path = os.path.join(output_dir, 'clusters.npy')
+    
     # deps, target_deps, schedule 是需要手动设置的
     schedule = 0.75
     deps = RESNET50_ORIGIN_DEPS_FLATTENED # resnet50 的 通道数量
@@ -185,7 +186,9 @@ def train_with_csgd(model, train_loader, test_loader, summary_writer, clusters_s
     # pacesetter_dict 也是需要手动设置的
     pacesetter_dict ={4: 4, 3: 4, 7: 4, 10: 4, 14: 14, 13: 14, 17: 14, 20: 14, 23: 14, 27: 27, 26: 27, 30: 27, 33: 27, 36: 27, 39: 27, 42: 27, 46: 46, 45: 46, 49: 46, 52: 46}
 
-    with Engine(local_rank=local_rank) as engine:
+    with ModelUtils(local_rank=local_rank) as engine:
+        engine.setup_log(name='train', log_dir=output_dir, file_name='ResNet50-CSGD-log.txt')
+
         # ------------------------ parepare optimizer, scheduler, criterion -------
         optimizer = torch.optim.SGD(model.parameters(), lr=0.04, momentum=0.9, weight_decay=1e-4)
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
@@ -204,7 +207,8 @@ def train_with_csgd(model, train_loader, test_loader, summary_writer, clusters_s
         best_acc = -1
 
         # summarywriter
-        writer = SummaryWriter(summary_writer)
+        if local_rank == 0:
+            writer = SummaryWriter(summary_writer)
 
         #  ========================== prepare the clusters and matrices for  C-SGD =======================
         kernel_namedvalue_list = engine.get_all_conv_kernel_namedvalue_as_list()
@@ -265,12 +269,13 @@ def train_with_csgd(model, train_loader, test_loader, summary_writer, clusters_s
             acc = eval(model, test_loader)
             print("Epoch %d/%d, Acc=%.4f" % (epoch, args.total_epochs, acc))
             if best_acc < acc:
-                torch.save(model.module, 'save/train_and_prune/ResNet50-round%d.pth' % (args.round))
+                torch.save(model.module, 'save/train_and_prune/ResNet50-CSGD-round%d.pth' % (args.round))
                 best_acc = acc
             scheduler.step()
-            writer.add_scalar('eval/acc', acc, epoch)
-            writer.add_scalar('train/loss', loss, epoch)
-            writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], epoch)
+            if local_rank == 0:
+                writer.add_scalar('eval/acc', acc, epoch)
+                writer.add_scalar('train/loss', loss, epoch)
+                writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], epoch)
 
         print("Best Acc=%.4f" % (best_acc))
 
@@ -280,12 +285,12 @@ def main():
     if args.mode == 'train':
         args.round = 0
         model = ResNet50(num_classes=10)
-        train_model(model, train_loader, test_loader, summary_writer="./runs/prune_resnet50_cifar10.log")
-    elif args.mode == 'train_with-csgd':
+        train_model(model, train_loader, test_loader, summary_writer="save/runs")
+    elif args.mode == 'train_with_csgd':
         args.round = 0
         model = ResNet50(num_classes=10)
-        train_with_csgd(model, train_loader, test_loader, summary_writer="./runs/prune_resnet50_cifar10_CSGD.log"
-                        , clusters_save_path="./save/train_and_prune")
+        train_with_csgd(model, train_loader, test_loader, summary_writer="save/runs"
+                        , output_dir="./save/train_and_prune")
     elif args.mode == 'prune':
         previous_ckpt = 'save/train_and_prune/ResNet50-round%d.pth' % (args.round - 1)
         print("Pruning round %d, load model from %s" % (args.round, previous_ckpt))

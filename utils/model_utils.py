@@ -3,6 +3,7 @@ import os
 
 from utils.cluster_params import *
 from utils.constant import *
+from utils.logger import get_logger
 
 NamedParamValue = namedtuple('NamedParamValue', ['name', 'value'])
 
@@ -24,9 +25,18 @@ class ModelUtils(object):
     def __init__(self, local_rank):
         self.state = State()
         self.local_rank = local_rank
+        self.logger = None
 
     def register_state(self, **kwargs):
         self.state.register(**kwargs)
+
+    def setup_log(self, name='train', log_dir=None, file_name=None):
+        if self.local_rank == 0:
+            self.logger = get_logger(
+                name, log_dir, self.local_rank, filename=file_name)
+        else:
+            self.logger = None
+        return self.logger
 
     def show_variables(self):
         if self.local_rank == 0:
@@ -45,6 +55,17 @@ class ModelUtils(object):
                 result.append(NamedParamValue(name=k, value=v.cpu().numpy()))
         return result
 
+    def __exit__(self, type, value, tb):
+        torch.cuda.empty_cache()
+        if type is not None:
+            if self.logger is not None:
+                self.logger.warning(
+                    "A exception occurred during Engine initialization, "
+                    "give up running process")
+            return False
+
+    def __enter__(self):
+        return self
 
 if __name__ == "__main__":
     import torchvision

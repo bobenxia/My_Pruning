@@ -131,6 +131,9 @@ def get_bias_gamma_and_beta_name(kernel_name):
     elif 'downsample' in kernel_name:
         gamma_name = kernel_name.replace('downsample.0', 'downsample.1')
         beta_name = kernel_name.replace('downsample.0', 'downsample.1').replace('weight', 'bias')
+    elif 'shortcut' in kernel_name:
+        gamma_name = kernel_name.replace('shortcut.0', 'shortcut.1')
+        beta_name = kernel_name.replace('shortcut.0', 'shortcut.1').replace('weight', 'bias')
     return bias_name, gamma_name, beta_name
 
 
@@ -161,6 +164,7 @@ if __name__=="__main__":
     model_utils = ModelUtils(local_rank=0)
     model_utils.register_state(model=model)
     kernel_namedvalue_list = model_utils.get_all_conv_kernel_namedvalue_as_list()
+    print(kernel_namedvalue_list)
 
     clusters_save_path = './clusters_save.npy'
     layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
