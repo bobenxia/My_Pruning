@@ -92,6 +92,7 @@ def train_model(model, train_loader, test_loader, summary_writer):
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
     loss_func = nn.CrossEntropyLoss().to(local_rank)
     model.to(local_rank)
+    
     # DDP: 构造DDP model
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
