@@ -22,14 +22,18 @@ from model.cifar.resnet import ResNet50
 from tools.print_model_info import get_model_infor_and_print
 from tools.write_excel import read_excel_and_write
 from utils.model_utils import *
+from datetime import datetime
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--mode', type=str, required=True, choices=['train', 'prune', 'test', 'finetune', 'train_with_csgd'])
+parser.add_argument('--mode',
+                    type=str,
+                    required=True,
+                    choices=['train', 'prune', 'test', 'finetune', 'train_with_csgd'])
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--verbose', action='store_true', default=False)
-parser.add_argument('--total_epochs', type=int, default=30)
+parser.add_argument('--total_epochs', type=int, default=100)
 parser.add_argument('--step_size', type=int, default=30)
 parser.add_argument('--round', type=int, default=1)
 parser.add_argument('--pruned_per', type=float, default=0.125)
@@ -39,6 +43,7 @@ parser.add_argument('--out_dir', type=str, default='save/')
 args = parser.parse_args()
 local_rank = args.local_rank
 block_prune_probs = [args.pruned_per] * 16
+TIMESTAMP = "{0:%Y-%m-%dT%H-%M-%S/}".format(datetime.now())
 
 
 def get_dataloader():
@@ -90,7 +95,7 @@ def train_model(model, train_loader, test_loader, summary_writer):
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
     loss_func = nn.CrossEntropyLoss().to(local_rank)
     model.to(local_rank)
-    
+
     # DDP: 构造DDP model
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
@@ -151,7 +156,6 @@ def prune_model(model):
     return model
 
 
-
 def update_net_params(net, param_name_to_merge_matrix, param_name_to_decay_matrix):
     # C-SGD works here
     for name, param in net.named_parameters():
@@ -171,45 +175,92 @@ def update_net_params(net, param_name_to_merge_matrix, param_name_to_decay_matri
                 g_mat = param.grad
             # 上面是获取当前的梯度，reshape 成 g_mat
             # 下面是将 g_mat 按照文章中的公式，进行矩阵相乘和相加。
-            csgd_gradient = param_name_to_merge_matrix[name].matmul(g_mat) + param_name_to_decay_matrix[name].matmul(param_mat)
+            csgd_gradient = param_name_to_merge_matrix[name].matmul(g_mat) + param_name_to_decay_matrix[name].matmul(
+                param_mat)
             # 将计算的结果更新到参数梯度中。
             param.grad.copy_(csgd_gradient.reshape(p_size))
 
 
 def train_with_csgd(model, train_loader, test_loader, summary_writer, output_dir):
     clusters_save_path = os.path.join(output_dir, 'clusters.npy')
-    
+
     # deps, target_deps, schedule 是需要手动设置的
     schedule = 0.75
-    deps = RESNET50_ORIGIN_DEPS_FLATTENED # resnet50 的 通道数量
-    target_deps = generate_itr_to_target_deps_by_schedule_vector(schedule, RESNET50_ORIGIN_DEPS_FLATTENED, RESNET50_INTERNAL_KERNEL_IDXES)
+    deps = RESNET50_ORIGIN_DEPS_FLATTENED  # resnet50 的 通道数量
+    target_deps = generate_itr_to_target_deps_by_schedule_vector(schedule, RESNET50_ORIGIN_DEPS_FLATTENED,
+                                                                 RESNET50_INTERNAL_KERNEL_IDXES)
     # pacesetter_dict 也是需要手动设置的
-    pacesetter_dict ={4: 4, 3: 4, 7: 4, 10: 4, 14: 14, 13: 14, 17: 14, 20: 14, 23: 14, 27: 27, 26: 27, 30: 27, 33: 27, 36: 27, 39: 27, 42: 27, 46: 46, 45: 46, 49: 46, 52: 46}
+    pacesetter_dict = {
+        4: 4,
+        3: 4,
+        7: 4,
+        10: 4,
+        14: 14,
+        13: 14,
+        17: 14,
+        20: 14,
+        23: 14,
+        27: 27,
+        26: 27,
+        30: 27,
+        33: 27,
+        36: 27,
+        39: 27,
+        42: 27,
+        46: 46,
+        45: 46,
+        49: 46,
+        52: 46
+    }
+
+    # ------------------------ parepare optimizer, scheduler, criterion -------
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.04, momentum=0.9, weight_decay=1e-4)
+    # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, eta_min=0.004, T_0=34, T_mult=2)
+    loss_func = nn.CrossEntropyLoss().to(local_rank)
+    # --------------------------------- done -------------------------------
+
+    # ------------------------ DDP：DDP backend初始化 ----------------------
+    torch.cuda.set_device(local_rank)
+    dist.init_process_group(backend='nccl')  # nccl是GPU设备上最快、最推荐的后端
+    model.to(local_rank)
+    # DDP: 构造DDP model
+    model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+    # --------------------------------- done -------------------------------
+
+    best_acc = -1
+
+    # summarywriter
+    if local_rank == 0:
+        writer = SummaryWriter(summary_writer)
+
+    for epoch in range(34):
+        model.train()
+        for i, (img, target) in enumerate(train_loader):
+            img, target = img.to(local_rank), target.to(local_rank)
+            optimizer.zero_grad()
+            out = model(img)
+            loss = loss_func(out, target)
+            loss.backward()
+            optimizer.step()
+            if i % 10 == 0 and args.verbose:
+                print("Epoch %d/%d, iter %d/%d, loss=%.4f" %
+                      (epoch, args.total_epochs, i, len(train_loader), loss.item()))
+        model.eval()
+        acc = eval(model, test_loader)
+        print("Epoch %d/%d, Acc=%.4f" % (epoch, args.total_epochs, acc))
+        if best_acc < acc:
+            torch.save(model.module, 'save/train_and_prune/ResNet50-round%d.pth' % (args.round))
+            best_acc = acc
+        scheduler.step()
+        if local_rank == 0:
+            writer.add_scalar('eval/acc', acc, epoch)
+            writer.add_scalar('train/loss', loss, epoch)
+            writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], epoch)
 
     with ModelUtils(local_rank=local_rank) as engine:
         engine.setup_log(name='train', log_dir=output_dir, file_name='ResNet50-CSGD-log.txt')
-
-        # ------------------------ parepare optimizer, scheduler, criterion -------
-        optimizer = torch.optim.SGD(model.parameters(), lr=0.04, momentum=0.9, weight_decay=1e-4)
-        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
-        loss_func = nn.CrossEntropyLoss().to(local_rank)
         engine.register_state(scheduler=scheduler, model=model, optimizer=optimizer)
-        # --------------------------------- done -------------------------------
-
-
-        # DDP：DDP backend初始化
-        torch.cuda.set_device(local_rank)
-        dist.init_process_group(backend='nccl')  # nccl是GPU设备上最快、最推荐的后端
-        model.to(local_rank)
-        # DDP: 构造DDP model
-        model = DDP(model, device_ids=[local_rank], output_device=local_rank)
-
-        best_acc = -1
-
-        # summarywriter
-        if local_rank == 0:
-            writer = SummaryWriter(summary_writer)
-
         #  ========================== prepare the clusters and matrices for  C-SGD =======================
         kernel_namedvalue_list = engine.get_all_conv_kernel_namedvalue_as_list()
         if os.path.exists(clusters_save_path):
@@ -219,8 +270,8 @@ def train_with_csgd(model, train_loader, test_loader, summary_writer, output_dir
                 # 获取聚类的 idx 结果
                 # # 返回的是一个字典，每个 key 是层id, 对应的 value 的值是一个长度等于当前层长度的聚类结果。[[1, 10, 11, 12, 14], [3, 6], [0, 4, 7, 8, 9, 13], [2, 5, 15]]
                 layer_idx_to_clusters = get_layer_idx_to_clusters(kernel_namedvalue_list=kernel_namedvalue_list,
-                                                                target_deps=target_deps,
-                                                                pacesetter_dict=pacesetter_dict)
+                                                                  target_deps=target_deps,
+                                                                  pacesetter_dict=pacesetter_dict)
                 # pacesetter_dict 是残差结构的连接层之间的关系。
                 if pacesetter_dict is not None:
                     for follower_idx, pacesetter_idx in pacesetter_dict.items():
@@ -242,14 +293,15 @@ def train_with_csgd(model, train_loader, test_loader, summary_writer, output_dir
         # 这块的功能似乎是要添加每层对于的 bias\gamma\beta 进入这个 param_name_to_merge_matrix
         add_vecs_to_merge_mat_dicts(param_name_to_merge_matrix)
         # core code 聚类结果的梯度计算，作为新的 weight decay
-        param_name_to_decay_matrix = generate_decay_matrix_for_kernel_and_vecs(deps=deps,
-                                                                               layer_idx_to_clusters=layer_idx_to_clusters,
-                                                                               kernel_namedvalue_list=kernel_namedvalue_list,
-                                                                               weight_decay=1e-4,
-                                                                               weight_decay_bias=0,
-                                                                               centri_strength=0.06)
+        param_name_to_decay_matrix = generate_decay_matrix_for_kernel_and_vecs(
+            deps=deps,
+            layer_idx_to_clusters=layer_idx_to_clusters,
+            kernel_namedvalue_list=kernel_namedvalue_list,
+            weight_decay=1e-4,
+            weight_decay_bias=0,
+            centri_strength=0.1)
 
-        for epoch in range(args.total_epochs):
+        for epoch in range(34, args.total_epochs):
             model.train()
             for i, (img, target) in enumerate(train_loader):
                 img, target = img.to(local_rank), target.to(local_rank)
@@ -264,7 +316,7 @@ def train_with_csgd(model, train_loader, test_loader, summary_writer, output_dir
                 optimizer.step()
                 if i % 10 == 0 and args.verbose:
                     print("Epoch %d/%d, iter %d/%d, loss=%.4f" %
-                        (epoch, args.total_epochs, i, len(train_loader), loss.item()))
+                          (epoch, args.total_epochs, i, len(train_loader), loss.item()))
             model.eval()
             acc = eval(model, test_loader)
             print("Epoch %d/%d, Acc=%.4f" % (epoch, args.total_epochs, acc))
@@ -285,12 +337,15 @@ def main():
     if args.mode == 'train':
         args.round = 0
         model = ResNet50(num_classes=10)
-        train_model(model, train_loader, test_loader, summary_writer="save/runs")
+        train_model(model, train_loader, test_loader, summary_writer="save/runs/" + TIMESTAMP)
     elif args.mode == 'train_with_csgd':
         args.round = 0
         model = ResNet50(num_classes=10)
-        train_with_csgd(model, train_loader, test_loader, summary_writer="save/runs"
-                        , output_dir="./save/train_and_prune")
+        train_with_csgd(model,
+                        train_loader,
+                        test_loader,
+                        summary_writer="save/runs/" + TIMESTAMP,
+                        output_dir="./save/train_and_prune")
     elif args.mode == 'prune':
         previous_ckpt = 'save/train_and_prune/ResNet50-round%d.pth' % (args.round - 1)
         print("Pruning round %d, load model from %s" % (args.round, previous_ckpt))
@@ -303,12 +358,17 @@ def main():
         model = torch.load(previous_ckpt)
         train_model(model, train_loader, test_loader, summary_writer="./runs/prune_resnet50_cifar10_after_prune.log")
     elif args.mode == 'test':
-        ckpt = 'save/train_and_prune/ResNet50-round%d.pth' % (args.round)
+        ckpt = 'save/train_and_prune/ResNet50-CSGD-round%d.pth' % (args.round)
         print("Load model from %s" % (ckpt))
 
         fake_input = torch.randn(1, 3, 32, 32)
         # need load model to cpu, avoid computing model GPU memory errors
         model = torch.load(ckpt, map_location=lambda storage, loc: storage)
+
+        from utils.misc import load_hdf5
+        model = ResNet50(num_classes=10)
+        hdf5_file = "save/prune_mode.hdf5"
+        load_hdf5(model, hdf5_file)
         model_infor = get_model_infor_and_print(model, fake_input, 0)
 
         model_infor['Model'] = 'resnet-50'

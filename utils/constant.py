@@ -45,10 +45,11 @@ for i in range(len(RESNET50_PW_LAYERS)):
     RESNET50_PW_LAYERS[i] += 1
 RESNET50_PW_LAYERS.insert(0, 1)
 
-RESNET50_INTERNAL_KERNEL_IDXES = [
-    1, 2, 5, 6, 8, 9, 11, 12, 15, 16, 18, 19, 21, 22, 24, 25, 28, 29, 31, 32, 34, 35, 37, 38, 40, 41, 43, 44, 47, 48,
-    50, 51
-]
+# 替换了
+RESNET50_INTERNAL_KERNEL_IDXES = [1, 2, 5, 6, 8, 9, 
+                            11, 12, 15, 16, 18, 19, 21, 22, 
+                            24, 25, 28, 29, 31, 32, 34, 35, 37, 38, 40, 41, 
+                            43, 44, 47, 48,50, 51]
 
 import numpy as np
 
@@ -184,40 +185,28 @@ RESNET50_ORIGIN_DEPS_FLATTENED = [
 ]
 RESNET50_ALL_CONV_LAYERS = range(0, len(RESNET50_ORIGIN_DEPS_FLATTENED))
 
-RESNET50_PACESETTER_IDXES = [1, 11, 24, 43]
+# 替换了
+RESNET50_PACESETTER_IDXES = [4, 14, 27, 46]
 RESNET50_ALL_SURVEY_LAYERS = [0] + RESNET50_INTERNAL_KERNEL_IDXES + RESNET50_PACESETTER_IDXES
+# 替换了
 RESNET50_FOLLOW_DICT = {
-    1: 1,
-    4: 1,
-    7: 1,
-    10: 1,
-    11: 11,
-    14: 11,
-    17: 11,
-    20: 11,
-    23: 11,
-    24: 24,
-    27: 24,
-    30: 24,
-    33: 24,
-    36: 24,
-    39: 24,
-    42: 24,
-    43: 43,
-    46: 43,
-    49: 43,
-    52: 43
+    1: 4, 4: 4, 7: 4, 10: 4,
+    11: 14, 14: 14, 17: 14, 20: 14, 23: 14,
+    24: 27, 27: 27, 30: 27, 33: 27, 36: 27, 39: 27, 42: 27,
+    43: 46, 46: 46, 49: 46, 52: 46
 }
-# RESNET50_FOLLOWER_DICT = {1:[1,4,7,10], 11:[11,14,17,20,23], 24:[24,27,30,33,36,39,42], 43:[43,46,49,52]}
+# RESNET50_FOLLOWER_DICT = {4:[1,4,7,10], 14[11,14,17,20,23], 27:[24,27,30,33,36,39,42], 46:[43,46,49,52]}
 RESNET50_succeeding_STRATEGY = {i: (i + 1) for i in RESNET50_INTERNAL_KERNEL_IDXES}
-RESNET50_succeeding_STRATEGY[0] = [1, 2]
-idxes_before_pacesetters = [i - 1 for i in RESNET50_PACESETTER_IDXES]
+RESNET50_succeeding_STRATEGY[0] = [1, 4]
+idxes_before_pacesetters = [i - 4 for i in RESNET50_PACESETTER_IDXES]
 for i in RESNET50_FOLLOW_DICT.keys():
     if i not in RESNET50_PACESETTER_IDXES:
         if i in idxes_before_pacesetters:
-            RESNET50_succeeding_STRATEGY[i] = [i + 1, i + 2]
+            RESNET50_succeeding_STRATEGY[i] = [i + 1, i + 4]
         else:
             RESNET50_succeeding_STRATEGY[i] = i + 1
+    else:
+        RESNET50_succeeding_STRATEGY[i-1] = i + 1
 
 resnet_n_to_num_blocks = {50: (3, 4, 6, 3), 101: (3, 4, 23, 3), 152: (3, 8, 36, 3)}
 
