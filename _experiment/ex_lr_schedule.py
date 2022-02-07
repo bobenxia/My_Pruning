@@ -12,7 +12,7 @@ mode='cosineAnnWarm'
 if mode=='cosineAnn':
     scheduler = CosineAnnealingLR(optimizer, T_max=30, eta_min=0)
 elif mode=='cosineAnnWarm':
-    scheduler = CosineAnnealingWarmRestarts(optimizer,eta_min=0.004, T_0=34,T_mult=2)
+    scheduler = CosineAnnealingWarmRestarts(optimizer,eta_min=0.004, T_0=41,T_mult=2)
     '''
     以T_0=5, T_mult=1为例:
     T_0:学习率第一次回到初始值的epoch位置.
@@ -25,7 +25,7 @@ elif mode=='cosineAnnWarm':
         T_0=5, T_mult=1
     '''
 plt.figure()
-max_epoch=100
+max_epoch=120
 iters=200
 cur_lr_list = []
 for epoch in range(max_epoch):
@@ -40,7 +40,7 @@ for epoch in range(max_epoch):
     scheduler.step()
     cur_lr=optimizer.param_groups[-1]['lr']
     cur_lr_list.append(cur_lr)
-    print('cur_lr:',cur_lr)
+    print(epoch, 'cur_lr:',cur_lr)
 x_list = list(range(len(cur_lr_list)))
 plt.plot(x_list, cur_lr_list)
 plt.show()

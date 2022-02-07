@@ -10,7 +10,7 @@ Entrypoint: "bash /root/code/My-Pruning/run_train.sh"
 Args: "" # -n yolox-tiny -d 8 -b 64 --fp16
 Tags: []
 # 源代码目录，指向运行volc命令行工具电脑上的某一个目录，最多10个文件，10GB大小
-UserCodePath: "/home/changliang/code/20220113_yolox/YOLOX"
+UserCodePath: "/home/changliang/code/20211207_school/My_Pruning"
 
 # remote path mount in container
 RemoteMountCodePath: "/root/code/"

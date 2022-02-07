@@ -1,5 +1,6 @@
 #  CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python3 -m torch.distributed.launch --nproc_per_node=8 prune_resnet101_cifar10.py --mode finetune
 import argparse
+from functools import total_ordering
 import os
 import sys
 import time
@@ -86,7 +87,7 @@ def eval(model, test_loader):
     return correct / total
 
 
-def train_model(model, train_loader, test_loader):
+def train_model(model, train_loader, test_loader,model_save_path):
     # DDP：DDP backend初始化
     torch.cuda.set_device(local_rank)
     dist.init_process_group(backend='nccl')  # nccl是GPU设备上最快、最推荐的后端
@@ -106,29 +107,8 @@ def train_model(model, train_loader, test_loader):
     if local_rank == 0:
         writer = SummaryWriter(TENSORBOARD_LOG_DIR + TIMESTAMP)
 
-    for epoch in range(args.total_epochs):
-        model.train()
-        for i, (img, target) in enumerate(train_loader):
-            img, target = img.to(local_rank), target.to(local_rank)
-            optimizer.zero_grad()
-            out = model(img)
-            loss = loss_func(out, target)
-            loss.backward()
-            optimizer.step()
-            if i % 10 == 0 and args.verbose:
-                print("Epoch %d/%d, iter %d/%d, loss=%.4f" %
-                      (epoch, args.total_epochs, i, len(train_loader), loss.item()))
-        model.eval()
-        acc = eval(model, test_loader)
-        print("Epoch %d/%d, Acc=%.4f" % (epoch, args.total_epochs, acc))
-        if best_acc < acc:
-            torch.save(model.module, 'save/train_and_prune/ResNet50-round%d.pth' % (args.round))
-            best_acc = acc
-        scheduler.step()
-        if local_rank == 0:
-            writer.add_scalar('eval/acc', acc, epoch)
-            writer.add_scalar('train/loss', loss, epoch)
-            writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], epoch)
+    start_epoch, end_epoch = 0, args.total_epochs
+    best_acc = train_core(model, train_loader, test_loader, model_save_path, optimizer, scheduler, loss_func, best_acc, writer, start_epoch, end_epoch)
 
     print("Best Acc=%.4f" % (best_acc))
 
@@ -184,35 +164,32 @@ def update_net_params(net, param_name_to_merge_matrix, param_name_to_decay_matri
             param.grad.copy_(csgd_gradient.reshape(p_size))
 
 
-def train_with_csgd(model, train_loader, test_loader, output_dir):
-    clusters_save_path = os.path.join(output_dir, 'clusters.npy')
-
-    # deps, target_deps, schedule 是需要手动设置的
+def train_with_csgd(model, is_resume, train_loader, test_loader, model_save_path):
+    # -------------------- 根据模型选择的一些超参 -------------------
     schedule = 0.75
     deps = RESNET50_ORIGIN_DEPS_FLATTENED  # resnet50 的 通道数量
-    target_deps = generate_itr_to_target_deps_by_schedule_vector(schedule, RESNET50_ORIGIN_DEPS_FLATTENED,
-                                                                 RESNET50_INTERNAL_KERNEL_IDXES)
-    # pacesetter_dict 也是需要手动设置的
+    target_deps = generate_itr_to_target_deps_by_schedule_vector(schedule, RESNET50_ORIGIN_DEPS_FLATTENED, RESNET50_INTERNAL_KERNEL_IDXES)
     pacesetter_dict = {
         4: 4,3: 4,7: 4,10: 4,14: 14,
         13: 14,17: 14,20: 14,23: 14,27: 27,26: 27,30: 27,33: 27,36: 27,
         39: 27,42: 27,46: 46,45: 46,49: 46,52: 46
     }
+    # --------------------------- done ----------------------------
 
-    # ------------------------ parepare optimizer, scheduler, criterion -------
+    # ------------ parepare optimizer, scheduler, criterion -------
     optimizer = torch.optim.SGD(model.parameters(), lr=0.04, momentum=0.9, weight_decay=1e-4)
     # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, eta_min=0.004, T_0=34, T_mult=2)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, eta_min=0.004, T_0=args.total_epoch//3+1, T_mult=2)
     loss_func = nn.CrossEntropyLoss().to(local_rank)
-    # --------------------------------- done -------------------------------
+    # --------------------------- done ------------------------------
 
-    # ------------------------ DDP：DDP backend初始化 ----------------------
+    # ------------------- DDP：DDP backend初始化 --------------------
     torch.cuda.set_device(local_rank)
     dist.init_process_group(backend='nccl')  # nccl是GPU设备上最快、最推荐的后端
     model.to(local_rank)
     # DDP: 构造DDP model
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
-    # --------------------------------- done -------------------------------
+    # -------------------------- done ------------------------------
 
     best_acc = -1
 
@@ -220,35 +197,20 @@ def train_with_csgd(model, train_loader, test_loader, output_dir):
     if local_rank == 0:
         writer = SummaryWriter(TENSORBOARD_LOG_DIR + TIMESTAMP)
 
-    for epoch in range(34):
-        model.train()
-        for i, (img, target) in enumerate(train_loader):
-            img, target = img.to(local_rank), target.to(local_rank)
-            optimizer.zero_grad()
-            out = model(img)
-            loss = loss_func(out, target)
-            loss.backward()
-            optimizer.step()
-            if i % 10 == 0 and args.verbose:
-                print("Epoch %d/%d, iter %d/%d, loss=%.4f" %
-                      (epoch, args.total_epochs, i, len(train_loader), loss.item()))
-        model.eval()
-        acc = eval(model, test_loader)
-        print("Epoch %d/%d, Acc=%.4f" % (epoch, args.total_epochs, acc))
-        if best_acc < acc:
-            torch.save(model.module, 'output_dir/'+'ResNet50-round%d.pth' % (args.round))
-            best_acc = acc
-        scheduler.step()
-        if local_rank == 0:
-            writer.add_scalar('eval/acc', acc, epoch)
-            writer.add_scalar('train/loss', loss, epoch)
-            writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], epoch)
+    # ------------------- 如果从头开始，需要先训练total_epoch//3 ----------------
+    if not is_resume:
+        start_epoch, end_epoch = 0, args.total_epoch//3
+        best_acc = train_core(model, train_loader, test_loader, model_save_path, optimizer, scheduler, loss_func, best_acc, writer, start_epoch, end_epoch)
+    # ----------------------------------- done -----------------------------------
 
     with ModelUtils(local_rank=local_rank) as engine:
-        engine.setup_log(name='train', log_dir=output_dir, file_name='ResNet50-CSGD-log.txt')
+        engine.setup_log(name='train', log_dir=model_save_path, file_name='ResNet50-CSGD-log.txt')
         engine.register_state(scheduler=scheduler, model=model, optimizer=optimizer)
-        #  ========================== prepare the clusters and matrices for  C-SGD =======================
+
+        # ------------------- prepare the clusters and matrices for  C-SGD -------------------
         kernel_namedvalue_list = engine.get_all_conv_kernel_namedvalue_as_list()
+
+        clusters_save_path = os.path.join(model_save_path, 'clusters.npy')
         if os.path.exists(clusters_save_path):
             layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
         else:
@@ -287,46 +249,67 @@ def train_with_csgd(model, train_loader, test_loader, output_dir):
             weight_decay_bias=0,
             centri_strength=0.1)
 
-        for epoch in range(34, args.total_epochs):
-            model.train()
-            for i, (img, target) in enumerate(train_loader):
-                img, target = img.to(local_rank), target.to(local_rank)
-                optimizer.zero_grad()
-                out = model(img)
-                loss = loss_func(out, target)
-                loss.backward()
-
-                # update networl params based on the CSGD
-                update_net_params(model, param_name_to_merge_matrix, param_name_to_decay_matrix)
-
-                optimizer.step()
-                if i % 10 == 0 and args.verbose:
-                    print("Epoch %d/%d, iter %d/%d, loss=%.4f" %
-                          (epoch, args.total_epochs, i, len(train_loader), loss.item()))
-            model.eval()
-            acc = eval(model, test_loader)
-            print("Epoch %d/%d, Acc=%.4f" % (epoch, args.total_epochs, acc))
-            if best_acc < acc:
-                torch.save(model.module, 'save/train_and_prune/ResNet50-CSGD-round%d.pth' % (args.round))
-                best_acc = acc
-            scheduler.step()
-            if local_rank == 0:
-                writer.add_scalar('eval/acc', acc, epoch)
-                writer.add_scalar('train/loss', loss, epoch)
-                writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], epoch)
-
+        if not is_resume:
+            start_epoch, end_epoch = args.total_epochs//3, args.total_epochs
+        else:
+            start_epoch, end_epoch = 0, args.total_epochs
+        kwargs = {"model":model, "param_name_to_merge_matrix":param_name_to_merge_matrix, "param_name_to_decay_matrix":param_name_to_decay_matrix}
+        best_acc = train_core(model, train_loader, test_loader, model_save_path, optimizer, scheduler, loss_func, 
+                    best_acc, writer, start_epoch, end_epoch, is_update=True, **kwargs)
         print("Best Acc=%.4f" % (best_acc))
+
+def train_core(model, train_loader, test_loader, 
+                model_save_path, model_name, 
+                optimizer, scheduler, loss_func, 
+                best_acc, writer, 
+                start_epoch, end_epoch, 
+                is_update=False, **kwargs):
+    for epoch in range(start_epoch, end_epoch):
+        model.train()
+        for i, (img, target) in enumerate(train_loader):
+            img, target = img.to(local_rank), target.to(local_rank)
+            optimizer.zero_grad()
+            out = model(img)
+            loss = loss_func(out, target)
+            loss.backward()
+
+            # update networl params based on the CSGD
+            if is_update:
+                update_net_params(**kwargs)
+
+            optimizer.step()
+            if i % 10 == 0 and args.verbose:
+                print("Epoch %d/%d, iter %d/%d, loss=%.4f" %
+                    (epoch, args.total_epochs, i, len(train_loader), loss.item()))
+        model.eval()
+        acc = eval(model, test_loader)
+        print("Epoch %d/%d, Acc=%.4f" % (epoch, args.total_epochs, acc))
+
+        model_file = model_save_path + model_name +'-round%d.pth' % (args.round)
+        if best_acc < acc:
+            if os.path.exists(model_file):
+                os.remove(model_file)
+            torch.save(model.module, model_file)
+            best_acc = acc
+        scheduler.step()
+        if local_rank == 0:
+            writer.add_scalar('eval/acc', acc, epoch)
+            writer.add_scalar('train/loss', loss, epoch)
+            writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], epoch)
+    return best_acc
 
 
 def main():
     train_loader, test_loader = get_dataloader()
+    model_save_path = '/Tos/model/my_pruning_model/'
     if args.mode == 'train':
         args.round = 0
         model = ResNet50(num_classes=10)
-        train_model(model, train_loader, test_loader)
+        train_model(model, train_loader, test_loader, model_save_path)
     elif args.mode == 'train_with_csgd':
         args.round = 0
         model = ResNet50(num_classes=10)
+        total_epoch = args.total_epoch
         train_with_csgd(model,train_loader,test_loader, output_dir="save/train_and_prune/" + TIMESTAMP)
     elif args.mode == 'prune':
         previous_ckpt = 'save/train_and_prune/ResNet50-round%d.pth' % (args.round - 1)
