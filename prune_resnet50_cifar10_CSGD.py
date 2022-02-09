@@ -45,8 +45,8 @@ args = parser.parse_args()
 local_rank = args.local_rank
 block_prune_probs = [args.pruned_per] * 16
 TIMESTAMP = "{0:%Y-%m-%dT%H-%M-%S/}".format(datetime.now())
-TENSORBOARD_LOG_DIR = os.getenv("TENSORBOARD_LOG_PATH", "/tensorboard_logs/")
-# TENSORBOARD_LOG_DIR = os.getenv("TENSORBOARD_LOG_PATH", "save/runs/")
+# TENSORBOARD_LOG_DIR = os.getenv("TENSORBOARD_LOG_PATH", "/tensorboard_logs/")
+TENSORBOARD_LOG_DIR = os.getenv("TENSORBOARD_LOG_PATH", "save/runs/")
 
 
 def get_dataloader():
@@ -178,6 +178,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
     optimizer = torch.optim.SGD(model.parameters(), lr=0.04, momentum=0.9, weight_decay=1e-4)
     # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, eta_min=0.004, T_0=args.total_epochs//3+1, T_mult=2)
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, eta_min=0.004, T_0=args.total_epochs+1, T_mult=2)
     loss_func = nn.CrossEntropyLoss().to(local_rank)
     # --------------------------- done ------------------------------
 
@@ -245,21 +246,39 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
             kernel_namedvalue_list=kernel_namedvalue_list,
             weight_decay=1e-4,
             weight_decay_bias=0,
-            centri_strength=0.1)
+            centri_strength=0.4)
+        # ----------------------------------- done -----------------------------------
+
+        # ------------------- 获取聚类 -------------------
+        conv_idx = 0
+        param_to_clusters = {} # 通过 layer_idx_to_clusters 获得 param_to_clusters
+        for k, v in model.named_parameters():
+            if v.dim() != 4:
+                continue
+            if conv_idx in layer_idx_to_clusters:
+                for clsts in layer_idx_to_clusters[conv_idx]:
+                    if len(clsts) > 1:
+                        param_to_clusters[v] = layer_idx_to_clusters[conv_idx]
+                        break
+            conv_idx += 1
+        # ----------------------------------- done -----------------------------------
 
         if not is_resume:
             start_epoch, end_epoch = args.total_epochs//3, args.total_epochs
         else:
             start_epoch, end_epoch = 0, args.total_epochs
+
         kwargs = {"param_name_to_merge_matrix":param_name_to_merge_matrix, "param_name_to_decay_matrix":param_name_to_decay_matrix}
         best_acc = train_core(model, train_loader, test_loader, model_save_path, model_name, optimizer, scheduler, loss_func, 
-                    best_acc, writer, start_epoch, end_epoch, is_update=True, **kwargs)
+                    best_acc, writer, start_epoch, end_epoch, is_update=True,param_to_clusters=param_to_clusters,  **kwargs)
+
         print("Best Acc=%.4f" % (best_acc))
+
 
 def train_core(model, train_loader, test_loader, 
                 model_save_path, model_name, optimizer, scheduler, loss_func, 
                 best_acc, writer, start_epoch, end_epoch, 
-                is_update=False, **kwargs):
+                is_update=False,param_to_clusters=None, **kwargs):
     for epoch in range(start_epoch, end_epoch):
         model.train()
         for i, (img, target) in enumerate(train_loader):
@@ -282,8 +301,8 @@ def train_core(model, train_loader, test_loader,
         print("Epoch %d/%d, Acc=%.4f" % (epoch, args.total_epochs, acc))
 
         model_file = model_save_path + model_name +'-round%d.pth' % (args.round)
-        if best_acc < acc:
-            if os.path.exists(model_file):
+        if best_acc < acc and local_rank == 0:
+            if local_rank == 0 and os.path.exists(model_file):
                 os.remove(model_file)
             torch.save(model.module, model_file)
             best_acc = acc
@@ -291,12 +310,26 @@ def train_core(model, train_loader, test_loader,
         writer.add_scalar('eval/acc', acc, epoch)
         writer.add_scalar('train/loss', loss, epoch)
         writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], epoch)
+
+        if is_update and local_rank == 0:
+            deviation_sum = 0
+            for param, clusters in param_to_clusters.items():
+                pvalue = param.detach().cpu().numpy()
+                for cl in clusters:
+                    if len(cl) == 1:
+                        continue
+                    selected = pvalue[cl, :, :, :]
+                    mean_kernel = np.mean(selected, axis=0, keepdims=True)
+                    diff = selected - mean_kernel
+                    deviation_sum += np.sum(diff ** 2)
+            writer.add_scalar('train/deviation_sum', deviation_sum, epoch)
+
     return best_acc
 
 
 def main():
-    model_save_path = '/Tos/model/my_pruning_model/'+ TIMESTAMP
-    # model_save_path = 'save/train_and_prune'
+    # model_save_path = '/Tos/model/my_pruning_model/'+ TIMESTAMP
+    model_save_path = 'save/train_and_prune/' + TIMESTAMP
     if local_rank == 0 and not os.path.exists(model_save_path):
         os.makedirs(model_save_path)
 

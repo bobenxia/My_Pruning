@@ -28,6 +28,8 @@ class ModelUtils(object):
         self.state = State()
         self.local_rank = local_rank
         self.logger = None
+        self.world_size = int(os.environ['WORLD_SIZE'])
+        self.world_rank = int(os.environ['RANK'])
 
     def register_state(self, **kwargs):
         self.state.register(**kwargs)
