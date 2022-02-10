@@ -140,7 +140,7 @@ def prune_model(model):
 def update_net_params(net, param_name_to_merge_matrix, param_name_to_decay_matrix):
     # C-SGD works here
     for name, param in net.named_parameters():
-        name = name.replace('module.', '')
+        # name = name.replace('module.', '')  
         if name in param_name_to_merge_matrix:
             p_dim = param.dim()
             p_size = param.size()
@@ -210,6 +210,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
         kernel_namedvalue_list = engine.get_all_conv_kernel_namedvalue_as_list()
 
         clusters_save_path = os.path.join(model_save_path, 'clusters.npy')
+        clusters_save_path = 'save/train_and_prune/2022-02-08T17-37-47/clusters.npy'
         if os.path.exists(clusters_save_path):
             layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
         else:
@@ -246,7 +247,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
             kernel_namedvalue_list=kernel_namedvalue_list,
             weight_decay=1e-4,
             weight_decay_bias=0,
-            centri_strength=0.4)
+            centri_strength=0.01)
         # ----------------------------------- done -----------------------------------
 
         # ------------------- 获取聚类 -------------------
@@ -270,7 +271,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
 
         kwargs = {"param_name_to_merge_matrix":param_name_to_merge_matrix, "param_name_to_decay_matrix":param_name_to_decay_matrix}
         best_acc = train_core(model, train_loader, test_loader, model_save_path, model_name, optimizer, scheduler, loss_func, 
-                    best_acc, writer, start_epoch, end_epoch, is_update=True,param_to_clusters=param_to_clusters,  **kwargs)
+                    best_acc, writer, start_epoch, end_epoch, is_update=True, param_to_clusters=param_to_clusters,layer_idx_to_clusters=layer_idx_to_clusters, **kwargs)
 
         print("Best Acc=%.4f" % (best_acc))
 
@@ -278,21 +279,21 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
 def train_core(model, train_loader, test_loader, 
                 model_save_path, model_name, optimizer, scheduler, loss_func, 
                 best_acc, writer, start_epoch, end_epoch, 
-                is_update=False,param_to_clusters=None, **kwargs):
+                is_update=False,param_to_clusters=None,layer_idx_to_clusters=None, **kwargs):
     for epoch in range(start_epoch, end_epoch):
         model.train()
         for i, (img, target) in enumerate(train_loader):
             img, target = img.to(local_rank), target.to(local_rank)
-            optimizer.zero_grad()
             out = model(img)
             loss = loss_func(out, target)
             loss.backward()
 
             # update networl params based on the CSGD
-            if is_update:
-                update_net_params(model, **kwargs)
+            # if is_update:
+            #     update_net_params(model, **kwargs)
 
             optimizer.step()
+            optimizer.zero_grad()
             if i % 10 == 0 and args.verbose:
                 print("Epoch %d/%d, iter %d/%d, loss=%.4f" %
                     (epoch, args.total_epochs, i, len(train_loader), loss.item()))
@@ -323,6 +324,8 @@ def train_core(model, train_loader, test_loader,
                     diff = selected - mean_kernel
                     deviation_sum += np.sum(diff ** 2)
             writer.add_scalar('train/deviation_sum', deviation_sum, epoch)
+            deviation_sum = calcu_sum_of_samplers_to_their_closest_cluster_center(model, layer_idx_to_clusters)
+            writer.add_scalar('train/deviation_sum2', deviation_sum, epoch)
 
     return best_acc
 

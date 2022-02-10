@@ -154,6 +154,26 @@ def add_vecs_to_merge_mat_dicts(param_name_to_merge_matrix):
         param_name_to_merge_matrix[beta_name] = param_name_to_merge_matrix[name]
 
 
+def calcu_sum_of_samplers_to_their_closest_cluster_center(model, layer_idx_to_clusters):
+    conv_idx = 0
+    sum = 0
+    for k, v in model.state_dict().items():
+        if v.dim() != 4:
+            continue
+        pvalue = np.reshape(v.detach().cpu().numpy(), (v.shape[0], -1))
+        if conv_idx in layer_idx_to_clusters:
+            for clsts in layer_idx_to_clusters[conv_idx]:
+                num_clsts = len(clsts)
+                if num_clsts > 1:
+                    km = KMeans(n_clusters=1)
+                    km.fit(pvalue[clsts,:])
+                    sum += km.inertia_
+        # print(k, sum)
+        conv_idx += 1
+
+    # print(sum)
+    return sum
+
 if __name__=="__main__":
     import torchvision
     from utils.model_utils import ModelUtils
@@ -164,7 +184,7 @@ if __name__=="__main__":
     model_utils = ModelUtils(local_rank=0)
     model_utils.register_state(model=model)
     kernel_namedvalue_list = model_utils.get_all_conv_kernel_namedvalue_as_list()
-    print(kernel_namedvalue_list)
+    # print(kernel_namedvalue_list)
 
     clusters_save_path = './clusters_save.npy'
     layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
@@ -177,12 +197,12 @@ if __name__=="__main__":
     # print(param_name_to_merge_matrix['layer1.0.conv1.weight'])
     print(param_name_to_merge_matrix.keys())
 
-    for k, v in model.state_dict().items():
-        print(k)
+    # for k, v in model.state_dict().items():
+    #     print(k)
 
-    add_vecs_to_merge_mat_dicts(param_name_to_merge_matrix)
-    print(param_name_to_merge_matrix.keys())
+    # add_vecs_to_merge_mat_dicts(param_name_to_merge_matrix)
+    # print(param_name_to_merge_matrix.keys())
 
-    for k, v in model.state_dict().items():
-        if k in param_name_to_merge_matrix.keys():
-            print(k)    
+    # for k, v in model.state_dict().items():
+    #     if k in param_name_to_merge_matrix.keys():
+    #         print(k)    
