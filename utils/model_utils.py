@@ -24,12 +24,13 @@ class State(object):
 
 
 class ModelUtils(object):
-    def __init__(self, local_rank):
+    def __init__(self, local_rank, for_eval=False):
         self.state = State()
         self.local_rank = local_rank
         self.logger = None
-        self.world_size = int(os.environ['WORLD_SIZE'])
-        self.world_rank = int(os.environ['RANK'])
+        if not for_eval:
+            self.world_size = int(os.environ['WORLD_SIZE'])
+            self.world_rank = int(os.environ['RANK'])
 
     def register_state(self, **kwargs):
         self.state.register(**kwargs)

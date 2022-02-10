@@ -149,8 +149,8 @@ if __name__ == "__main__":
     import torch
     from utils.constant import RESNET50_succeeding_STRATEGY
 
-    output_dir = "./save/train_and_prune"
-    clusters_save_path = os.path.join(output_dir, 'clusters.npy')
+    output_dir = "save/train_and_prune"
+    clusters_save_path = clusters_save_path = 'save/train_and_prune/2022-02-08T17-37-47/clusters.npy'
 
     layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
     print(layer_idx_to_clusters)
@@ -164,12 +164,12 @@ if __name__ == "__main__":
 
     model = ResNet50(num_classes=10)
 
-    engine = ModelUtils(local_rank=0)
+    engine = ModelUtils(local_rank=0, for_eval=True)
     engine.setup_log(name='test', log_dir=output_dir, file_name='ResNet50-CSGD-test-log.txt')
     engine.register_state(scheduler=None, model=model, optimizer=None)
     engine.show_variables()
 
-    ckpt = 'save/train_and_prune/ResNet50-CSGD-round0.pth'
+    ckpt = 'save/train_and_prune/2022-02-10T11-44-44/Resnet50-CSGD-round0.pth'
     model = torch.load(ckpt, map_location=lambda storage, loc: storage)
     engine.register_state(scheduler=None, model=model, optimizer=None)
     engine.show_variables()
