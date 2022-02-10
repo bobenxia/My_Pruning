@@ -180,6 +180,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, eta_min=0.004, T_0=args.total_epochs//3+1, T_mult=2)
     # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, eta_min=0.004, T_0=args.total_epochs+1, T_mult=2)
     loss_func = nn.CrossEntropyLoss().to(local_rank)
+    centri_strength=0.01
     # --------------------------- done ------------------------------
 
     # ------------------- DDP：DDP backend初始化 --------------------
@@ -247,7 +248,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
             kernel_namedvalue_list=kernel_namedvalue_list,
             weight_decay=1e-4,
             weight_decay_bias=0,
-            centri_strength=0.01)
+            centri_strength=centri_strength)
         # ----------------------------------- done -----------------------------------
 
         # ------------------- 获取聚类 -------------------
@@ -289,8 +290,8 @@ def train_core(model, train_loader, test_loader,
             loss.backward()
 
             # update networl params based on the CSGD
-            # if is_update:
-            #     update_net_params(model, **kwargs)
+            if is_update:
+                update_net_params(model, **kwargs)
 
             optimizer.step()
             optimizer.zero_grad()
