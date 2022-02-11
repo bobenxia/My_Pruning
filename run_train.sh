@@ -8,6 +8,12 @@ python3 -c "import torch; print(torch.__version__)"
 python3 -c "import torch; print(torch.distributed.is_available())"
 
 # install requirements
+pip3 install scikit-learn
+pip3 install ptflops
+pip3 install pynvml
+pip3 install pandas
+pip3 install coloredlogs
+pip3 install h5py
 # pip3 install loguru==0.5.2
 # pip3 install thop
 # pip3 install tabulate

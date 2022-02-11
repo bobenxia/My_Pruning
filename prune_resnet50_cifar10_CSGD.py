@@ -180,7 +180,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, eta_min=0.004, T_0=args.total_epochs//3+1, T_mult=2)
     # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, eta_min=0.004, T_0=args.total_epochs+1, T_mult=2)
     loss_func = nn.CrossEntropyLoss().to(local_rank)
-    centri_strength=0.01
+    centri_strength=0.02
     # --------------------------- done ------------------------------
 
     # ------------------- DDP：DDP backend初始化 --------------------
@@ -194,7 +194,10 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
     best_acc = -1
 
     # summarywriter
-    writer = SummaryWriter(TENSORBOARD_LOG_DIR + TIMESTAMP)
+    if local_rank == 0:
+        writer = SummaryWriter(TENSORBOARD_LOG_DIR + TIMESTAMP)
+    else:
+        writer = None
 
     # ------------------- 如果从头开始，需要先训练total_epoch//3 ----------------
     if not is_resume:
@@ -211,7 +214,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
         kernel_namedvalue_list = engine.get_all_conv_kernel_namedvalue_as_list()
 
         clusters_save_path = os.path.join(model_save_path, 'clusters.npy')
-        clusters_save_path = 'save/train_and_prune/2022-02-08T17-37-47/clusters.npy'
+        # clusters_save_path = 'save/train_and_prune/2022-02-08T17-37-47/clusters.npy'
         if os.path.exists(clusters_save_path):
             layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
         else:
@@ -309,9 +312,10 @@ def train_core(model, train_loader, test_loader,
             torch.save(model.module, model_file)
             best_acc = acc
         scheduler.step()
-        writer.add_scalar('eval/acc', acc, epoch)
-        writer.add_scalar('train/loss', loss, epoch)
-        writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], epoch)
+        if writer != None:
+            writer.add_scalar('eval/acc', acc, epoch)
+            writer.add_scalar('train/loss', loss, epoch)
+            writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], epoch)
 
         if is_update and local_rank == 0:
             deviation_sum = 0
@@ -324,9 +328,10 @@ def train_core(model, train_loader, test_loader,
                     mean_kernel = np.mean(selected, axis=0, keepdims=True)
                     diff = selected - mean_kernel
                     deviation_sum += np.sum(diff ** 2)
-            writer.add_scalar('train/deviation_sum', deviation_sum, epoch)
-            deviation_sum = calcu_sum_of_samplers_to_their_closest_cluster_center(model, layer_idx_to_clusters)
-            writer.add_scalar('train/deviation_sum2', deviation_sum, epoch)
+            deviation_sum2 = calcu_sum_of_samplers_to_their_closest_cluster_center(model, layer_idx_to_clusters)
+            if writer != None:
+                writer.add_scalar('train/deviation_sum', deviation_sum, epoch)
+                writer.add_scalar('train/deviation_sum2', deviation_sum2, epoch)
 
     return best_acc
 
@@ -348,19 +353,19 @@ def main():
         model = ResNet50(num_classes=10)
         previous_ckpt = 'save/train_and_prune/ResNet50-round0.pth'
         print("Pruning round %d, load model from %s" % (args.round, previous_ckpt))
-        model = torch.load(previous_ckpt)
+        model = torch.load(previous_ckpt, map_location=torch.device("cpu"))
         model_name = "Resnet50-CSGD"
         train_with_csgd(model, model_name, train_loader,test_loader,is_resume=True, model_save_path= model_save_path)
     elif args.mode == 'prune':
         previous_ckpt = 'save/train_and_prune/ResNet50-round%d.pth' % (args.round - 1)
         print("Pruning round %d, load model from %s" % (args.round, previous_ckpt))
-        model = torch.load(previous_ckpt)
+        model = torch.load(previous_ckpt, map_location=torch.device("cpu"))
         prune_model(model)
         torch.save(model, 'save/train_and_prune/ResNet50-round%d.pth' % (args.round))
     elif args.mode == 'finetune':
         previous_ckpt = 'save/train_and_prune/ResNet50-round%d.pth' % (args.round)
         print("Finetune round %d, load model from %s" % (args.round, previous_ckpt))
-        model = torch.load(previous_ckpt)
+        model = torch.load(previous_ckpt, map_location=torch.device("cpu"))
         train_model(model, train_loader, test_loader, summary_writer="./runs/prune_resnet50_cifar10_after_prune.log")
     elif args.mode == 'test':
         ckpt = 'save/train_and_prune/ResNet50-CSGD-round%d.pth' % (args.round)
