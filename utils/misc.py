@@ -1,6 +1,8 @@
 import h5py
 import torch
 import numpy as np
+import os
+import shutil
 
 
 def representsInt(s):
@@ -62,15 +64,35 @@ def load_hdf5(model, path):
     hdf5_dict = read_hdf5(path)
     load_from_weights_dict(model, hdf5_dict)
 
+def copy_files(source_path, target_path):
+    if not os.path.exists(target_path):
+        os.makedirs(target_path, exist_ok=True)
+
+    if os.path.exists(source_path):
+        # root 所指的是当前正在遍历的这个文件夹的本身的地址
+        # dirs 是一个 list，内容是该文件夹中所有的目录的名字(不包括子目录)
+        # files 同样是 list, 内容是该文件夹中所有的文件(不包括子目录)
+        for root, dirs, files in os.walk(source_path):
+            for file in files:
+                src_file = os.path.join(root, file)
+                shutil.copy(src_file, target_path)
+                print(src_file)
+    print('copy files finished!')
 
 if __name__ == "__main__":
-    from model.cifar.resnet import ResNet50
-    model = ResNet50(num_classes=10)
+    # # test 1
+    # from model.cifar.resnet import ResNet50
+    # model = ResNet50(num_classes=10)
 
-    for k, v in model.named_parameters():
-        print(k, v.shape)
-    for k, v in model.named_buffers():
-        print(k)
+    # for k, v in model.named_parameters():
+    #     print(k, v.shape)
+    # for k, v in model.named_buffers():
+    #     print(k)
 
-    hdf5_file = "save/prune_mode.hdf5"
-    load_hdf5(model, hdf5_file)
+    # hdf5_file = "save/prune_mode.hdf5"
+    # load_hdf5(model, hdf5_file)
+
+    # test 2
+    source_path = "/root/code/My_Pruning/save/train_and_prune/"
+    target_path = "/Tos/test/new/"
+    copy_files(source_path, target_path)

@@ -24,6 +24,7 @@ from model.cifar.resnet import ResNet50
 from tools.print_model_info import get_model_infor_and_print
 from tools.write_excel import read_excel_and_write
 from utils.model_utils import *
+from utils.misc import copy_files
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
@@ -34,7 +35,7 @@ parser.add_argument('--mode',
                     choices=['train', 'prune', 'test', 'finetune', 'train_with_csgd'])
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--verbose', action='store_true', default=False)
-parser.add_argument('--total_epochs', type=int, default=100)
+parser.add_argument('--total_epochs', type=int, default=1)
 parser.add_argument('--step_size', type=int, default=30)
 parser.add_argument('--round', type=int, default=1)
 parser.add_argument('--pruned_per', type=float, default=0.125)
@@ -45,8 +46,8 @@ args = parser.parse_args()
 local_rank = args.local_rank
 block_prune_probs = [args.pruned_per] * 16
 TIMESTAMP = "{0:%Y-%m-%dT%H-%M-%S/}".format(datetime.now())
-# TENSORBOARD_LOG_DIR = os.getenv("TENSORBOARD_LOG_PATH", "/tensorboard_logs/")
-TENSORBOARD_LOG_DIR = os.getenv("TENSORBOARD_LOG_PATH", "save/runs/")
+TENSORBOARD_LOG_DIR = os.getenv("TENSORBOARD_LOG_PATH", "/tensorboard_logs/")
+
 
 
 def get_dataloader():
@@ -88,7 +89,7 @@ def eval(model, test_loader):
     return correct / total
 
 
-def train_model(model, train_loader, test_loader,model_save_path):
+def train_model(model,model_name, train_loader, test_loader,model_save_path):
     # DDP：DDP backend初始化
     torch.cuda.set_device(local_rank)
     dist.init_process_group(backend='nccl')  # nccl是GPU设备上最快、最推荐的后端
@@ -103,12 +104,16 @@ def train_model(model, train_loader, test_loader,model_save_path):
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
     best_acc = -1
-    writer = SummaryWriter(TENSORBOARD_LOG_DIR + TIMESTAMP)
+    if local_rank == 0:
+        writer = SummaryWriter(TENSORBOARD_LOG_DIR + TIMESTAMP)
+    else:
+        writer = None
 
     start_epoch, end_epoch = 0, args.total_epochs
-    best_acc = train_core(model, train_loader, test_loader, model_save_path, optimizer, scheduler, loss_func, best_acc, writer, start_epoch, end_epoch)
+    best_acc = train_core(model, train_loader, test_loader, model_save_path, model_name, optimizer, scheduler, loss_func, best_acc, writer, start_epoch, end_epoch)
 
-    print("Best Acc=%.4f" % (best_acc))
+    if local_rank == 0:
+        print("Best Acc=%.4f" % (best_acc))
 
 
 def prune_model(model):
@@ -307,7 +312,7 @@ def train_core(model, train_loader, test_loader,
 
         model_file = model_save_path + model_name +'-round%d.pth' % (args.round)
         if best_acc < acc and local_rank == 0:
-            if local_rank == 0 and os.path.exists(model_file):
+            if  os.path.exists(model_file):
                 os.remove(model_file)
             torch.save(model.module, model_file)
             best_acc = acc
@@ -337,24 +342,32 @@ def train_core(model, train_loader, test_loader,
 
 
 def main():
-    # model_save_path = '/Tos/model/my_pruning_model/'+ TIMESTAMP
     model_save_path = 'save/train_and_prune/' + TIMESTAMP
-    if local_rank == 0 and not os.path.exists(model_save_path):
-        os.makedirs(model_save_path)
+    tensorboard_log_path = TENSORBOARD_LOG_DIR + TIMESTAMP
+    tos_model_save_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + TIMESTAMP
+    tos_tensorboard_log_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + TIMESTAMP
+
+    if local_rank == 0:
+        os.makedirs(model_save_path, exist_ok=True)
+        os.makedirs(tensorboard_log_path, exist_ok=True)
 
     train_loader, test_loader = get_dataloader()
 
     if args.mode == 'train':
         args.round = 0
         model = ResNet50(num_classes=10)
-        train_model(model, train_loader, test_loader, model_save_path)
+        model_name = "ResNet50"
+        train_model(model,model_name, train_loader, test_loader, model_save_path)
+        if local_rank == 0:
+            copy_files(model_save_path, tos_model_save_path)
+            copy_files(tensorboard_log_path, tos_tensorboard_log_path)
     elif args.mode == 'train_with_csgd':
         args.round = 0
         model = ResNet50(num_classes=10)
         previous_ckpt = 'save/train_and_prune/ResNet50-round0.pth'
         print("Pruning round %d, load model from %s" % (args.round, previous_ckpt))
         model = torch.load(previous_ckpt, map_location=torch.device("cpu"))
-        model_name = "Resnet50-CSGD"
+        model_name = "ResNet50-CSGD"
         train_with_csgd(model, model_name, train_loader,test_loader,is_resume=True, model_save_path= model_save_path)
     elif args.mode == 'prune':
         previous_ckpt = 'save/train_and_prune/ResNet50-round%d.pth' % (args.round - 1)
