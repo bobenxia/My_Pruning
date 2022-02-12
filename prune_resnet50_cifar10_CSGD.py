@@ -381,17 +381,17 @@ def main():
         model = torch.load(previous_ckpt, map_location=torch.device("cpu"))
         train_model(model, train_loader, test_loader, summary_writer="./runs/prune_resnet50_cifar10_after_prune.log")
     elif args.mode == 'test':
-        ckpt = 'save/train_and_prune/ResNet50-CSGD-round%d.pth' % (args.round)
-        print("Load model from %s" % (ckpt))
-
-        fake_input = torch.randn(1, 3, 32, 32)
-        # need load model to cpu, avoid computing model GPU memory errors
-        model = torch.load(ckpt, map_location=lambda storage, loc: storage)
+        # ckpt = 'save/train_and_prune/ResNet50-CSGD-round%d.pth' % (args.round)
+        # print("Load model from %s" % (ckpt))
+        # # need load model to cpu, avoid computing model GPU memory errors
+        # model = torch.load(ckpt, map_location=lambda storage, loc: storage)
 
         from utils.misc import load_hdf5
         model = ResNet50(num_classes=10)
-        hdf5_file = "save/prune_mode.hdf5"
+        hdf5_file = "save/train_and_prune/prune_mode.hdf5"
         load_hdf5(model, hdf5_file)
+
+        fake_input = torch.randn(1, 3, 32, 32)
         
         model_infor = get_model_infor_and_print(model, fake_input, 0)
 

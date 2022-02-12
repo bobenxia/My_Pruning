@@ -5,7 +5,7 @@ from model.cifar.resnet import ResNet50
 from utils.cluster_params import generate_itr_to_target_deps_by_schedule_vector
 from utils.constant import RESNET50_INTERNAL_KERNEL_IDXES, RESNET50_ORIGIN_DEPS_FLATTENED
 
-from utils.misc import save_hdf5
+from utils.misc import save_hdf5, copy_files
 from utils.model_utils import ModelUtils
 
 
@@ -150,7 +150,7 @@ if __name__ == "__main__":
     from utils.constant import RESNET50_succeeding_STRATEGY
 
     output_dir = "save/train_and_prune"
-    clusters_save_path = clusters_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.003_0.75_300/clusters.npy'
+    clusters_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.003_0.75_300/clusters.npy'
 
     layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
     print(layer_idx_to_clusters)
@@ -176,6 +176,7 @@ if __name__ == "__main__":
 
     csgd_prune_and_save(engine=engine,
                         layer_idx_to_clusters=layer_idx_to_clusters,
-                        save_file='/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.003_0.75_300/prune_mode.hdf5',
+                        save_file='save/train_and_prune/prune_mode.hdf5',
                         succeeding_strategy=succeeding_strategy,
                         new_deps=target_deps)
+    copy_files('save/train_and_prune/', '/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.003_0.75_300/')
