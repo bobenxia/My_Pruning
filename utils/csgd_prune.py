@@ -150,14 +150,14 @@ if __name__ == "__main__":
     from utils.constant import RESNET50_succeeding_STRATEGY
 
     output_dir = "save/train_and_prune"
-    clusters_save_path = clusters_save_path = 'save/train_and_prune/2022-02-08T17-37-47/clusters.npy'
+    clusters_save_path = clusters_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.003_0.75_300/clusters.npy'
 
     layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
     print(layer_idx_to_clusters)
 
     succeeding_strategy = RESNET50_succeeding_STRATEGY
     # deps, target_deps, schedule 是需要手动设置的
-    schedule = 0.50
+    schedule = 0.75
     deps = RESNET50_ORIGIN_DEPS_FLATTENED  # resnet50 的 通道数量
     target_deps = generate_itr_to_target_deps_by_schedule_vector(schedule, RESNET50_ORIGIN_DEPS_FLATTENED,
                                                                  RESNET50_INTERNAL_KERNEL_IDXES)
@@ -169,13 +169,13 @@ if __name__ == "__main__":
     engine.register_state(scheduler=None, model=model, optimizer=None)
     engine.show_variables()
 
-    ckpt = 'save/train_and_prune/2022-02-10T11-44-44/Resnet50-CSGD-round0.pth'
+    ckpt = '/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.003_0.75_300/ResNet50-CSGD-round0.pth'
     model = torch.load(ckpt, map_location=lambda storage, loc: storage)
     engine.register_state(scheduler=None, model=model, optimizer=None)
     engine.show_variables()
 
     csgd_prune_and_save(engine=engine,
                         layer_idx_to_clusters=layer_idx_to_clusters,
-                        save_file='save/prune_mode.hdf5',
+                        save_file='/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.003_0.75_300/prune_mode.hdf5',
                         succeeding_strategy=succeeding_strategy,
                         new_deps=target_deps)

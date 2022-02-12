@@ -35,7 +35,7 @@ parser.add_argument('--mode',
                     choices=['train', 'prune', 'test', 'finetune', 'train_with_csgd'])
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--verbose', action='store_true', default=False)
-parser.add_argument('--total_epochs', type=int, default=1)
+parser.add_argument('--total_epochs', type=int, default=100)
 parser.add_argument('--step_size', type=int, default=30)
 parser.add_argument('--round', type=int, default=1)
 parser.add_argument('--pruned_per', type=float, default=0.125)
