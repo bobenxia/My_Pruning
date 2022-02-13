@@ -35,7 +35,7 @@ parser.add_argument('--mode',
                     choices=['train', 'prune', 'test', 'finetune', 'train_with_csgd'])
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--verbose', action='store_true', default=False)
-parser.add_argument('--total_epochs', type=int, default=100)
+parser.add_argument('--total_epochs', type=int, default=600)
 parser.add_argument('--step_size', type=int, default=30)
 parser.add_argument('--round', type=int, default=1)
 parser.add_argument('--pruned_per', type=float, default=0.125)
@@ -96,7 +96,8 @@ def train_model(model,model_name, train_loader, test_loader,model_save_path):
 
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     optimizer = torch.optim.SGD(model.parameters(), lr=0.04, momentum=0.9, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
+    # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, eta_min=0, T_0=args.total_epochs//3+1, T_mult=2)
     loss_func = nn.CrossEntropyLoss().to(local_rank)
     model.to(local_rank)
 
@@ -169,7 +170,7 @@ def update_net_params(net, param_name_to_merge_matrix, param_name_to_decay_matri
 
 def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, model_save_path):
     # -------------------- 根据模型选择的一些超参 -------------------
-    schedule = 0.75
+    schedule = 0.25
     deps = RESNET50_ORIGIN_DEPS_FLATTENED  # resnet50 的 通道数量
     target_deps = generate_itr_to_target_deps_by_schedule_vector(schedule, RESNET50_ORIGIN_DEPS_FLATTENED, RESNET50_INTERNAL_KERNEL_IDXES)
     pacesetter_dict = {
@@ -182,10 +183,10 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
     # ------------ parepare optimizer, scheduler, criterion -------
     optimizer = torch.optim.SGD(model.parameters(), lr=0.04, momentum=0.9, weight_decay=1e-4)
     # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, eta_min=0.004, T_0=args.total_epochs//3+1, T_mult=2)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, eta_min=0, T_0=args.total_epochs//3+1, T_mult=2)
     # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, eta_min=0.004, T_0=args.total_epochs+1, T_mult=2)
     loss_func = nn.CrossEntropyLoss().to(local_rank)
-    centri_strength=0.02
+    centri_strength=0.003
     # --------------------------- done ------------------------------
 
     # ------------------- DDP：DDP backend初始化 --------------------
@@ -281,8 +282,9 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
         kwargs = {"param_name_to_merge_matrix":param_name_to_merge_matrix, "param_name_to_decay_matrix":param_name_to_decay_matrix}
         best_acc = train_core(model, train_loader, test_loader, model_save_path, model_name, optimizer, scheduler, loss_func, 
                     best_acc, writer, start_epoch, end_epoch, is_update=True, param_to_clusters=param_to_clusters,layer_idx_to_clusters=layer_idx_to_clusters, **kwargs)
-
-        print("Best Acc=%.4f" % (best_acc))
+        
+        if local_rank == 0:
+            print("Best Acc=%.4f" % (best_acc))
 
 
 def train_core(model, train_loader, test_loader, 
@@ -344,12 +346,14 @@ def train_core(model, train_loader, test_loader,
 def main():
     model_save_path = 'save/train_and_prune/' + TIMESTAMP
     tensorboard_log_path = TENSORBOARD_LOG_DIR + TIMESTAMP
-    tos_model_save_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + TIMESTAMP
-    tos_tensorboard_log_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + TIMESTAMP
+    tos_model_save_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_0.003_0.25_600epoch'
+    tos_tensorboard_log_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_0.003_0.25_600epoch'
 
     if local_rank == 0:
         os.makedirs(model_save_path, exist_ok=True)
         os.makedirs(tensorboard_log_path, exist_ok=True)
+        os.makedirs(tos_model_save_path, exist_ok=True)
+        os.makedirs(tos_tensorboard_log_path, exist_ok=True)
 
     train_loader, test_loader = get_dataloader()
 
@@ -364,11 +368,14 @@ def main():
     elif args.mode == 'train_with_csgd':
         args.round = 0
         model = ResNet50(num_classes=10)
-        previous_ckpt = 'save/train_and_prune/ResNet50-round0.pth'
-        print("Pruning round %d, load model from %s" % (args.round, previous_ckpt))
-        model = torch.load(previous_ckpt, map_location=torch.device("cpu"))
+        # previous_ckpt = 'save/train_and_prune/ResNet50-round0.pth'
+        # print("Pruning round %d, load model from %s" % (args.round, previous_ckpt))
+        # model = torch.load(previous_ckpt, map_location=torch.device("cpu"))
         model_name = "ResNet50-CSGD"
         train_with_csgd(model, model_name, train_loader,test_loader,is_resume=True, model_save_path= model_save_path)
+        if local_rank == 0:
+            copy_files(model_save_path, tos_model_save_path)
+            copy_files(tensorboard_log_path, tos_tensorboard_log_path)
     elif args.mode == 'prune':
         previous_ckpt = 'save/train_and_prune/ResNet50-round%d.pth' % (args.round - 1)
         print("Pruning round %d, load model from %s" % (args.round, previous_ckpt))
@@ -382,14 +389,15 @@ def main():
         train_model(model, train_loader, test_loader, summary_writer="./runs/prune_resnet50_cifar10_after_prune.log")
     elif args.mode == 'test':
         # ckpt = 'save/train_and_prune/ResNet50-CSGD-round%d.pth' % (args.round)
-        # print("Load model from %s" % (ckpt))
-        # # need load model to cpu, avoid computing model GPU memory errors
-        # model = torch.load(ckpt, map_location=lambda storage, loc: storage)
+        ckpt = "/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.0003_0.75_600epoch/ResNet50-round0.pth"
+        print("Load model from %s" % (ckpt))
+        # need load model to cpu, avoid computing model GPU memory errors
+        model = torch.load(ckpt, map_location=lambda storage, loc: storage)
 
-        from utils.misc import load_hdf5
-        model = ResNet50(num_classes=10)
-        hdf5_file = "save/train_and_prune/prune_mode.hdf5"
-        load_hdf5(model, hdf5_file)
+        # from utils.misc import load_hdf5
+        # model = ResNet50(num_classes=10)
+        # hdf5_file = "save/train_and_prune/prune_mode.hdf5"
+        # load_hdf5(model, hdf5_file)
 
         fake_input = torch.randn(1, 3, 32, 32)
         
