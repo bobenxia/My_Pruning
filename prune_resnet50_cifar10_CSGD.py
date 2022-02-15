@@ -170,7 +170,7 @@ def update_net_params(net, param_name_to_merge_matrix, param_name_to_decay_matri
 
 def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, model_save_path):
     # -------------------- 根据模型选择的一些超参 -------------------
-    schedule = 0.25
+    schedule = 0.75
     deps = RESNET50_ORIGIN_DEPS_FLATTENED  # resnet50 的 通道数量
     target_deps = generate_itr_to_target_deps_by_schedule_vector(schedule, RESNET50_ORIGIN_DEPS_FLATTENED, RESNET50_INTERNAL_KERNEL_IDXES)
     pacesetter_dict = {
@@ -310,7 +310,8 @@ def train_core(model, train_loader, test_loader,
                     (epoch, args.total_epochs, i, len(train_loader), loss.item()))
         model.eval()
         acc = eval(model, test_loader)
-        print("Epoch %d/%d, Acc=%.4f" % (epoch, args.total_epochs, acc))
+        if local_rank==0:
+            print("Epoch %d/%d, Acc=%.4f" % (epoch, args.total_epochs, acc))
 
         model_file = model_save_path + model_name +'-round%d.pth' % (args.round)
         if best_acc < acc and local_rank == 0:
@@ -346,8 +347,8 @@ def train_core(model, train_loader, test_loader,
 def main():
     model_save_path = 'save/train_and_prune/' + TIMESTAMP
     tensorboard_log_path = TENSORBOARD_LOG_DIR + TIMESTAMP
-    tos_model_save_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_0.003_0.25_600epoch'
-    tos_tensorboard_log_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_0.003_0.25_600epoch'
+    tos_model_save_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_0.003_0.75_600epoch'
+    tos_tensorboard_log_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_0.003_0.75_600epoch'
 
     if local_rank == 0:
         os.makedirs(model_save_path, exist_ok=True)
@@ -389,7 +390,7 @@ def main():
         train_model(model, train_loader, test_loader, summary_writer="./runs/prune_resnet50_cifar10_after_prune.log")
     elif args.mode == 'test':
         # ckpt = 'save/train_and_prune/ResNet50-CSGD-round%d.pth' % (args.round)
-        ckpt = "/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.0003_0.75_600epoch/ResNet50-round0.pth"
+        ckpt = "/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.0_1.0_600epoch/ResNet50-round0.pth"
         print("Load model from %s" % (ckpt))
         # need load model to cpu, avoid computing model GPU memory errors
         model = torch.load(ckpt, map_location=lambda storage, loc: storage)
@@ -406,11 +407,12 @@ def main():
         model_infor['Model'] = 'resnet-50'
         model_infor['Top1-acc(%)'] = eval(model, test_loader)
         model_infor['Top5-acc(%)'] = ' '
-        model_infor['If_base'] = 'False'
-        model_infor['Strategy'] = f'CSGD+{block_prune_probs}' if model_infor['If_base'] == 'False' else ' '
+        model_infor['If_base'] = 'True'
+        # model_infor['Strategy'] = f'CSGD+{block_prune_probs}' if model_infor['If_base'] == 'False' else ' '
+        model_infor['Strategy'] = f'SGD_CAWR_0.0_1.0_600epoch'
         print(model_infor)
 
-        excel_path = "model_data.xlsx"
+        excel_path = "model_data_2.xlsx"
         read_excel_and_write(excel_path, model_infor)
 
 

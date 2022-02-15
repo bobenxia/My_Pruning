@@ -2,7 +2,7 @@
 # 2. volc ml_task submit --conf=volcengine_job.yaml
 
 TaskName: "20220128_pytorch_resnet_csgd_train"
-Description: "train yolox "
+Description: "prune "
 # 运行命令
 #Entrypoint: "sleep 1d"
 Entrypoint: "bash /root/code/My_Pruning/run_train.sh"
