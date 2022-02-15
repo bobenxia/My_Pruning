@@ -390,15 +390,42 @@ def main():
         train_model(model, train_loader, test_loader, summary_writer="./runs/prune_resnet50_cifar10_after_prune.log")
     elif args.mode == 'test':
         # ckpt = 'save/train_and_prune/ResNet50-CSGD-round%d.pth' % (args.round)
-        ckpt = "/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.0_1.0_600epoch/ResNet50-round0.pth"
+        ckpt = "/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.003_0.75_600epoch/ResNet50-CSGD-round0.pth"
         print("Load model from %s" % (ckpt))
         # need load model to cpu, avoid computing model GPU memory errors
         model = torch.load(ckpt, map_location=lambda storage, loc: storage)
 
         # from utils.misc import load_hdf5
-        # model = ResNet50(num_classes=10)
-        # hdf5_file = "save/train_and_prune/prune_mode.hdf5"
-        # load_hdf5(model, hdf5_file)
+        
+        # list1 = ['0.001', '0.003', '0.0003']
+        # list2 = ['0.25', '0.50', '0.75']
+        # for l in list1:
+        #     for n in list2:
+        #         hdf5_file = f'save/move/{l}-{n}/prune_mode.hdf5'
+        #         if not os.path.exists(hdf5_file):
+        #             continue
+        #         print(hdf5_file)
+        #         model = ResNet50(num_classes=10)
+        #         load_hdf5(model, hdf5_file)
+        
+        #         fake_input = torch.randn(1, 3, 32, 32)
+                
+        #         model_infor = get_model_infor_and_print(model, fake_input, 0)
+
+        #         model_infor['Model'] = 'resnet-50'
+        #         start = time.time()
+        #         model_infor['Top1-acc(%)'] = eval(model, test_loader)
+        #         end = time.time()
+        #         print("time is :", end-start)
+        #         model_infor['Top5-acc(%)'] = ' '
+        #         model_infor['If_base'] = 'False'
+        #         # model_infor['Strategy'] = f'CSGD+{block_prune_probs}' if model_infor['If_base'] == 'False' else ' '
+        #         model_infor['Strategy'] = f'SGD_CAWR_{l}_{n}_600epoch'
+        #         print(model_infor)
+
+        #         excel_path = "model_data_2.xlsx"
+        #         read_excel_and_write(excel_path, model_infor)
+
 
         fake_input = torch.randn(1, 3, 32, 32)
         
@@ -407,9 +434,9 @@ def main():
         model_infor['Model'] = 'resnet-50'
         model_infor['Top1-acc(%)'] = eval(model, test_loader)
         model_infor['Top5-acc(%)'] = ' '
-        model_infor['If_base'] = 'True'
+        model_infor['If_base'] = 'False'
         # model_infor['Strategy'] = f'CSGD+{block_prune_probs}' if model_infor['If_base'] == 'False' else ' '
-        model_infor['Strategy'] = f'SGD_CAWR_0.0_1.0_600epoch'
+        model_infor['Strategy'] = f'SGD_CAWR_0.003_0.75_600epoch'
         print(model_infor)
 
         excel_path = "model_data_2.xlsx"
