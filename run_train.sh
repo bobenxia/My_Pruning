@@ -28,4 +28,4 @@ pip3 install h5py
 # WANDB_API_KEY = ""
 
 # launch training
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python3 -m torch.distributed.launch --nproc_per_node=8 prune_resnet50_cifar10_CSGD.py --mode train_with_csgd
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python3 -m torch.distributed.launch --nproc_per_node=8 prune_resnet50_cifar10_CSGD_top.py --mode train_with_csgd

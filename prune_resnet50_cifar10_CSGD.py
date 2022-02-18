@@ -359,8 +359,8 @@ def train_core(model, train_loader, test_loader,
 def main():
     model_save_path = 'save/train_and_prune/' + TIMESTAMP
     tensorboard_log_path = TENSORBOARD_LOG_DIR + TIMESTAMP
-    tos_model_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_0.0003_0.25_600epoch'
-    tos_tensorboard_log_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_0.0003_0.25_600epoch'
+    tos_model_save_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_0.0003_0.25_600epoch'
+    tos_tensorboard_log_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_0.0003_0.25_600epoch'
 
     if local_rank == 0:
         os.makedirs(model_save_path, exist_ok=True)

@@ -37,7 +37,7 @@ parser.add_argument('--mode',
                     choices=['train', 'prune', 'test', 'finetune', 'train_with_csgd'])
 parser.add_argument('--batch_size', type=int, default=512)
 parser.add_argument('--verbose', action='store_true', default=False)
-parser.add_argument('--total_epochs', type=int, default=200)
+parser.add_argument('--total_epochs', type=int, default=600)
 parser.add_argument('--step_size', type=int, default=30)
 parser.add_argument('--round', type=int, default=1)
 parser.add_argument('--pruned_per', type=float, default=0.125)
@@ -107,7 +107,7 @@ def train_model(model, model_name, train_loader, test_loader,model_save_path):
         raise ValueError("scheduler type error!")
     loss_func = nn.CrossEntropyLoss().to(local_rank)
 
-    hdf5_file = f'/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.0003_0.25_600epoch/prune_mode.hdf5'
+    hdf5_file = f'/Tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.0003_0.25_600epoch/prune_mode.hdf5'
     print(hdf5_file)
     load_hdf5(model, hdf5_file)
 
@@ -219,9 +219,9 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
     else:
         writer = None
 
-    # ------------------- 预训练 20 epoch,  然后进行全局聚类 ----------------
-    start_epoch, end_epoch = 0, 20
-    best_acc = train_core(model, train_loader, test_loader, model_save_path, model_name+'20epoch', 
+    # ------------------- 预训练 40 epoch,  然后进行全局聚类 ----------------
+    start_epoch, end_epoch = 0, 40
+    best_acc = train_core(model, train_loader, test_loader, model_save_path, model_name+'40epoch', 
     optimizer, scheduler, loss_func, best_acc, writer, start_epoch, end_epoch)
     # ----------------------------------- done -----------------------------------
 
@@ -320,7 +320,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
             conv_idx += 1
         # ----------------------------------- done -----------------------------------
 
-        start_epoch, end_epoch = 20, args.total_epochs
+        start_epoch, end_epoch = 40, args.total_epochs
 
         kwargs = {"param_name_to_merge_matrix":param_name_to_merge_matrix, "param_name_to_decay_matrix":param_name_to_decay_matrix}
         best_acc = train_core(model, train_loader, test_loader, model_save_path, model_name, optimizer, scheduler, loss_func, 
@@ -390,8 +390,8 @@ def train_core(model, train_loader, test_loader,
 def main():
     model_save_path = 'save/train_and_prune/' + TIMESTAMP
     tensorboard_log_path = TENSORBOARD_LOG_DIR + TIMESTAMP
-    tos_model_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test_600epoch'
-    tos_tensorboard_log_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test_600epoch'
+    tos_model_save_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test_600epoch'
+    tos_tensorboard_log_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test_600epoch'
 
     if local_rank == 0:
         os.makedirs(model_save_path, exist_ok=True)
