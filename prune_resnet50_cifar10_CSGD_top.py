@@ -37,7 +37,7 @@ parser.add_argument('--mode',
                     choices=['train', 'prune', 'test', 'finetune', 'train_with_csgd'])
 parser.add_argument('--batch_size', type=int, default=512)
 parser.add_argument('--verbose', action='store_true', default=False)
-parser.add_argument('--total_epochs', type=int, default=600)
+parser.add_argument('--total_epochs', type=int, default=200)
 parser.add_argument('--step_size', type=int, default=30)
 parser.add_argument('--round', type=int, default=1)
 parser.add_argument('--pruned_per', type=float, default=0.125)
@@ -185,6 +185,8 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
     schedule = 0.75
     deps = RESNET50_ORIGIN_DEPS_FLATTENED  # resnet50 的 通道数量
     target_deps = generate_itr_to_target_deps_by_schedule_vector(schedule, RESNET50_ORIGIN_DEPS_FLATTENED, RESNET50_INTERNAL_KERNEL_IDXES)
+    target_deps_for_kernel_matrix = generate_itr_to_target_deps_by_schedule_vector(1, RESNET50_ORIGIN_DEPS_FLATTENED, RESNET50_INTERNAL_KERNEL_IDXES)
+    target_deps_for_decay_matrix = generate_itr_to_target_deps_by_schedule_vector(0, RESNET50_ORIGIN_DEPS_FLATTENED, RESNET50_INTERNAL_KERNEL_IDXES)
     pacesetter_dict = {
         4: 4,3: 4,7: 4,10: 4,14: 14,
         13: 14,17: 14,20: 14,23: 14,27: 27,26: 27,30: 27,33: 27,36: 27,
@@ -217,13 +219,13 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
     else:
         writer = None
 
-    # ------------------- 如果从头开始，需要先训练total_epoch//3 ----------------
-    if not is_resume:
-        start_epoch, end_epoch = 0, args.total_epochs//3
-        best_acc = train_core(model, train_loader, test_loader, model_save_path, model_name, 
-        optimizer, scheduler, loss_func, best_acc, writer, start_epoch, end_epoch)
+    # ------------------- 预训练 20 epoch,  然后进行全局聚类 ----------------
+    start_epoch, end_epoch = 0, 20
+    best_acc = train_core(model, train_loader, test_loader, model_save_path, model_name+'20epoch', 
+    optimizer, scheduler, loss_func, best_acc, writer, start_epoch, end_epoch)
     # ----------------------------------- done -----------------------------------
 
+    # ------------------- 全局聚类 以及 后面的局部聚类 ----------------
     with ModelUtils(local_rank=local_rank) as engine:
         engine.setup_log(name='train', log_dir=model_save_path, file_name='ResNet50-CSGD-log.txt')
         engine.register_state(scheduler=scheduler, model=model, optimizer=optimizer)
@@ -231,41 +233,73 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
         # ------------------- prepare the clusters and matrices for  C-SGD -------------------
         kernel_namedvalue_list = engine.get_all_conv_kernel_namedvalue_as_list()
 
-        clusters_save_path = os.path.join(model_save_path, 'clusters.npy')
-        # clusters_save_path = 'save/train_and_prune/2022-02-08T17-37-47/clusters.npy'
-        if os.path.exists(clusters_save_path):
-            layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
+        #--------------------------- 1、生成 kernel martrix -----------------------------------
+        clusters_save_path_for_kernel_matrix = os.path.join(model_save_path, 'clusters_for_kernel_matrix.npy')
+        # clusters_save_path_for_kernel_matrix = 'save/train_and_prune/2022-02-08T17-37-47/clusters.npy'
+        if os.path.exists(clusters_save_path_for_kernel_matrix):
+            layer_idx_to_clusters_for_kernel_matrix = np.load(clusters_save_path_for_kernel_matrix, allow_pickle=True).item()
         else:
             if local_rank == 0:
                 # 获取聚类的 idx 结果
                 # # 返回的是一个字典，每个 key 是层id, 对应的 value 的值是一个长度等于当前层长度的聚类结果。[[1, 10, 11, 12, 14], [3, 6], [0, 4, 7, 8, 9, 13], [2, 5, 15]]
-                layer_idx_to_clusters = get_layer_idx_to_clusters(kernel_namedvalue_list=kernel_namedvalue_list,
-                                                                  target_deps=target_deps,
+                # 生成 layer_idx_to_clusters_for_kernel_matrix 为了计算 kernel matrix
+                layer_idx_to_clusters_for_kernel_matrix = get_layer_idx_to_clusters(kernel_namedvalue_list=kernel_namedvalue_list,
+                                                                  target_deps=target_deps_for_kernel_matrix,
                                                                   pacesetter_dict=pacesetter_dict)
                 # pacesetter_dict 是残差结构的连接层之间的关系。
                 if pacesetter_dict is not None:
                     for follower_idx, pacesetter_idx in pacesetter_dict.items():
                         # 这里将残差的最后一层的剪枝方案直接等同于直连的剪枝方案
-                        if pacesetter_idx in layer_idx_to_clusters:
-                            layer_idx_to_clusters[follower_idx] = layer_idx_to_clusters[pacesetter_idx]
+                        if pacesetter_idx in layer_idx_to_clusters_for_kernel_matrix:
+                            layer_idx_to_clusters_for_kernel_matrix[follower_idx] = layer_idx_to_clusters_for_kernel_matrix[pacesetter_idx]
                 # 保存聚类的 idx 结果
-                np.save(clusters_save_path, layer_idx_to_clusters)
+                np.save(clusters_save_path_for_kernel_matrix, layer_idx_to_clusters_for_kernel_matrix)
             else:
-                while not os.path.exists(clusters_save_path):
+                while not os.path.exists(clusters_save_path_for_kernel_matrix):
                     time.sleep(10)
                     print('sleep, waiting for process 0 to calculate clusters')
-                layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
+                layer_idx_to_clusters_for_kernel_matrix = np.load(clusters_save_path_for_kernel_matrix, allow_pickle=True).item()
+        # ----------------------------------- done -----------------------------------
+
+        #--------------------------- 2、生成 kernel martrix -----------------------------------
+        clusters_save_path_for_decay_matrix = os.path.join(model_save_path, 'clusters_for_decay_matrix.npy')
+        # clusters_save_path_for_decay_matrix = 'save/train_and_prune/2022-02-08T17-37-47/clusters.npy'
+        if os.path.exists(clusters_save_path_for_decay_matrix):
+            layer_idx_to_clusters_for_decay_matrix = np.load(clusters_save_path_for_decay_matrix, allow_pickle=True).item()
+        else:
+            if local_rank == 0:
+                # 获取聚类的 idx 结果
+                # # 返回的是一个字典，每个 key 是层id, 对应的 value 的值是一个长度等于当前层长度的聚类结果。[[1, 10, 11, 12, 14], [3, 6], [0, 4, 7, 8, 9, 13], [2, 5, 15]]
+                # 生成 layer_idx_to_clusters_for_decay_matrix 为了计算 decay matrix
+                layer_idx_to_clusters_for_decay_matrix = get_layer_idx_to_clusters(kernel_namedvalue_list=kernel_namedvalue_list,
+                                                                  target_deps=target_deps_for_decay_matrix,
+                                                                  pacesetter_dict=pacesetter_dict)
+                # pacesetter_dict 是残差结构的连接层之间的关系。
+                if pacesetter_dict is not None:
+                    for follower_idx, pacesetter_idx in pacesetter_dict.items():
+                        # 这里将残差的最后一层的剪枝方案直接等同于直连的剪枝方案
+                        if pacesetter_idx in layer_idx_to_clusters_for_decay_matrix:
+                            layer_idx_to_clusters_for_decay_matrix[follower_idx] = layer_idx_to_clusters_for_decay_matrix[pacesetter_idx]
+                # 保存聚类的 idx 结果
+                np.save(clusters_save_path_for_decay_matrix, layer_idx_to_clusters_for_decay_matrix)
+            else:
+                while not os.path.exists(clusters_save_path_for_decay_matrix):
+                    time.sleep(10)
+                    print('sleep, waiting for process 0 to calculate clusters')
+                layer_idx_to_clusters_for_decay_matrix = np.load(clusters_save_path_for_decay_matrix, allow_pickle=True).item()
+        # ----------------------------------- done -----------------------------------
+        
 
         # 根据 聚类的通道的结果，生成 matrix，方便计算
         param_name_to_merge_matrix = generate_merge_matrix_for_kernel(deps=deps,
-                                                                      layer_idx_to_clusters=layer_idx_to_clusters,
+                                                                      layer_idx_to_clusters=layer_idx_to_clusters_for_kernel_matrix,
                                                                       kernel_namedvalue_list=kernel_namedvalue_list)
         # 这块的功能似乎是要添加每层对于的 bias\gamma\beta 进入这个 param_name_to_merge_matrix
         add_vecs_to_merge_mat_dicts(param_name_to_merge_matrix)
-        # core code 聚类结果的梯度计算，作为新的 weight decay
+        # 加入超参centri_strength控制的向心力，作为新的 weight decay
         param_name_to_decay_matrix = generate_decay_matrix_for_kernel_and_vecs(
             deps=deps,
-            layer_idx_to_clusters=layer_idx_to_clusters,
+            layer_idx_to_clusters=layer_idx_to_clusters_for_decay_matrix,
             kernel_namedvalue_list=kernel_namedvalue_list,
             weight_decay=1e-4,
             weight_decay_bias=0,
@@ -278,22 +312,19 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
         for k, v in model.named_parameters():
             if v.dim() != 4:
                 continue
-            if conv_idx in layer_idx_to_clusters:
-                for clsts in layer_idx_to_clusters[conv_idx]:
+            if conv_idx in layer_idx_to_clusters_for_decay_matrix:
+                for clsts in layer_idx_to_clusters_for_decay_matrix[conv_idx]:
                     if len(clsts) > 1:
-                        param_to_clusters[v] = layer_idx_to_clusters[conv_idx]
+                        param_to_clusters[v] = layer_idx_to_clusters_for_decay_matrix[conv_idx]
                         break
             conv_idx += 1
         # ----------------------------------- done -----------------------------------
 
-        if not is_resume:
-            start_epoch, end_epoch = args.total_epochs//3, args.total_epochs
-        else:
-            start_epoch, end_epoch = 0, args.total_epochs
+        start_epoch, end_epoch = 20, args.total_epochs
 
         kwargs = {"param_name_to_merge_matrix":param_name_to_merge_matrix, "param_name_to_decay_matrix":param_name_to_decay_matrix}
         best_acc = train_core(model, train_loader, test_loader, model_save_path, model_name, optimizer, scheduler, loss_func, 
-                    best_acc, writer, start_epoch, end_epoch, is_update=True, param_to_clusters=param_to_clusters,layer_idx_to_clusters=layer_idx_to_clusters, **kwargs)
+                    best_acc, writer, start_epoch, end_epoch, is_update=True, param_to_clusters=param_to_clusters,layer_idx_to_clusters=layer_idx_to_clusters_for_decay_matrix, **kwargs)
         
         if local_rank == 0:
             print("Best Acc=%.4f" % (best_acc))
@@ -359,8 +390,8 @@ def train_core(model, train_loader, test_loader,
 def main():
     model_save_path = 'save/train_and_prune/' + TIMESTAMP
     tensorboard_log_path = TENSORBOARD_LOG_DIR + TIMESTAMP
-    tos_model_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_0.0003_0.25_600epoch'
-    tos_tensorboard_log_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_0.0003_0.25_600epoch'
+    tos_model_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test_600epoch'
+    tos_tensorboard_log_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test_600epoch'
 
     if local_rank == 0:
         os.makedirs(model_save_path, exist_ok=True)

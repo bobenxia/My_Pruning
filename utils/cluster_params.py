@@ -38,7 +38,7 @@ def get_layer_idx_to_clusters(kernel_namedvalue_list, target_deps, pacesetter_di
         if pacesetter_dict is not None and _is_follower(layer_idx, pacesetter_dict):
             continue
 
-        if num_filters > target_deps[layer_idx]:
+        if num_filters >= target_deps[layer_idx]:
             # print(named_kv.name)
             result[layer_idx] = cluster_by_kmeans(kernel_value=named_kv.value, num_cluster=target_deps[layer_idx])
         elif num_filters < target_deps[layer_idx]:
@@ -58,7 +58,7 @@ def generate_itr_to_target_deps_by_schedule_vector(schedule, origin_deps, intern
     final_deps = np.array(origin_deps)
     for i in range(1, len(origin_deps)):  # starts from 0 if you want to prune the first layer
         # if i in internal_kernel_idxes:
-        final_deps[i] = np.ceil(final_deps[i] * schedule).astype(np.int32)
+        final_deps[i] = max(np.ceil(final_deps[i] * schedule).astype(np.int32),1)
         # else:
     return final_deps
 

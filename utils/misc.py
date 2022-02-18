@@ -36,7 +36,7 @@ def load_from_weights_dict(model, hdf5_dict, ignore_keyword='IGNORE_KEYWORD'):
     for k, v in model.named_parameters():
         new_k = k.replace(ignore_keyword, '')
         if new_k in hdf5_dict:
-            print('assign {} from hdf5'.format(k))
+            # print('assign {} from hdf5'.format(k))
             # print(k, v.size(), hdf5_dict[k])
             set_value(v, hdf5_dict[new_k])
             assigned_params += 1
@@ -45,7 +45,7 @@ def load_from_weights_dict(model, hdf5_dict, ignore_keyword='IGNORE_KEYWORD'):
     for k, v in model.named_buffers():
         new_k = k.replace(ignore_keyword, '')
         if new_k in hdf5_dict:
-            print('buffer {} from hdf5'.format(k))
+            # print('buffer {} from hdf5'.format(k))
             set_value(v, hdf5_dict[new_k])
             assigned_params += 1
         else:
@@ -79,6 +79,14 @@ def copy_files(source_path, target_path):
                 print(src_file)
     print('copy files finished!')
 
+def copy_file(source_file, target_path):
+    if not os.path.exists(source_file):
+        raise ValueError("source file is not exist")
+    else:
+        print(f"target path: {target_path}")
+        shutil.copy(source_file, target_path)
+        print('copy file finished!')
+
 if __name__ == "__main__":
     # # test 1
     # from model.cifar.resnet import ResNet50
@@ -93,6 +101,6 @@ if __name__ == "__main__":
     # load_hdf5(model, hdf5_file)
 
     # test 2
-    source_path = "/root/code/My_Pruning/save/train_and_prune/"
-    target_path = "/Tos/test/new/"
-    copy_files(source_path, target_path)
+    source_path = "save/train_and_prune/ResNet50-CSGD-log.txt"
+    target_path = "save/train_and_prune/2022-02-15T16-02-20"
+    copy_file(source_path, target_path)
