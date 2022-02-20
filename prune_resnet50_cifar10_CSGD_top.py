@@ -26,6 +26,7 @@ from tools.write_excel import read_excel_and_write
 from utils.model_utils import *
 from utils.misc import copy_file, copy_files
 from utils.misc import load_hdf5
+from utils.cluster_params import generate_itr_for_model_follow_global_cluster
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
@@ -54,7 +55,7 @@ TENSORBOARD_LOG_DIR = os.getenv("TENSORBOARD_LOG_PATH", "/tensorboard_logs/")
 
 
 def get_dataloader():
-    train_loader = DataLoader(CIFAR10('/Tos/cifar_10',
+    train_loader = DataLoader(CIFAR10('/tos/cifar_10',
                                       train=True,
                                       transform=transforms.Compose([
                                           transforms.RandomCrop(32, padding=4),
@@ -64,7 +65,7 @@ def get_dataloader():
                                       download=True),
                               batch_size=args.batch_size,
                               num_workers=2)
-    test_loader = DataLoader(CIFAR10('/Tos/cifar_10',
+    test_loader = DataLoader(CIFAR10('/tos/cifar_10',
                                      train=False,
                                      transform=transforms.Compose([
                                          transforms.ToTensor(),
@@ -107,7 +108,7 @@ def train_model(model, model_name, train_loader, test_loader,model_save_path):
         raise ValueError("scheduler type error!")
     loss_func = nn.CrossEntropyLoss().to(local_rank)
 
-    hdf5_file = f'/Tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.0003_0.25_600epoch/prune_mode.hdf5'
+    hdf5_file = f'/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.0003_0.25_600epoch/prune_mode.hdf5'
     print(hdf5_file)
     load_hdf5(model, hdf5_file)
 
@@ -182,9 +183,7 @@ def update_net_params(net, param_name_to_merge_matrix, param_name_to_decay_matri
 
 def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, model_save_path):
     # -------------------- 根据模型选择的一些超参 -------------------
-    schedule = 0.75
     deps = RESNET50_ORIGIN_DEPS_FLATTENED  # resnet50 的 通道数量
-    target_deps = generate_itr_to_target_deps_by_schedule_vector(schedule, RESNET50_ORIGIN_DEPS_FLATTENED, RESNET50_INTERNAL_KERNEL_IDXES)
     target_deps_for_kernel_matrix = generate_itr_to_target_deps_by_schedule_vector(1, RESNET50_ORIGIN_DEPS_FLATTENED, RESNET50_INTERNAL_KERNEL_IDXES)
     target_deps_for_decay_matrix = generate_itr_to_target_deps_by_schedule_vector(0, RESNET50_ORIGIN_DEPS_FLATTENED, RESNET50_INTERNAL_KERNEL_IDXES)
     pacesetter_dict = {
@@ -221,7 +220,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
 
     # ------------------- 预训练 40 epoch,  然后进行全局聚类 ----------------
     start_epoch, end_epoch = 0, 40
-    best_acc = train_core(model, train_loader, test_loader, model_save_path, model_name+'40epoch', 
+    best_acc = train_core(model, train_loader, test_loader, model_save_path, model_name+'-train', 
     optimizer, scheduler, loss_func, best_acc, writer, start_epoch, end_epoch)
     # ----------------------------------- done -----------------------------------
 
@@ -230,7 +229,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
         engine.setup_log(name='train', log_dir=model_save_path, file_name='ResNet50-CSGD-log.txt')
         engine.register_state(scheduler=scheduler, model=model, optimizer=optimizer)
 
-        # ------------------- prepare the clusters and matrices for  C-SGD -------------------
+        # ---------------------------  全局聚类    ------------------------------
         kernel_namedvalue_list = engine.get_all_conv_kernel_namedvalue_as_list()
 
         #--------------------------- 1、生成 kernel martrix -----------------------------------
@@ -320,11 +319,77 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
             conv_idx += 1
         # ----------------------------------- done -----------------------------------
 
-        start_epoch, end_epoch = 40, args.total_epochs
+        start_epoch, end_epoch = 40, 200
 
         kwargs = {"param_name_to_merge_matrix":param_name_to_merge_matrix, "param_name_to_decay_matrix":param_name_to_decay_matrix}
-        best_acc = train_core(model, train_loader, test_loader, model_save_path, model_name, optimizer, scheduler, loss_func, 
+        best_acc = train_core(model, train_loader, test_loader, model_save_path, model_name+'-global-cluster', optimizer, scheduler, loss_func, 
                     best_acc, writer, start_epoch, end_epoch, is_update=True, param_to_clusters=param_to_clusters,layer_idx_to_clusters=layer_idx_to_clusters_for_decay_matrix, **kwargs)
+        
+        if local_rank == 0:
+            print("Best Acc=%.4f" % (best_acc))
+
+        # ---------------------------  全局聚类    ------------------------------
+        schedule = 0.90 # 超参，控制 pca 拟合情况
+        target_deps = generate_itr_for_model_follow_global_cluster(schedule, model)
+        clusters_save_path = os.path.join(model_save_path, 'clusters.npy')
+        if os.path.exists(clusters_save_path):
+            layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
+        else:
+            if local_rank == 0:
+                # 获取聚类的 idx 结果
+                # # 返回的是一个字典，每个 key 是层id, 对应的 value 的值是一个长度等于当前层长度的聚类结果。[[1, 10, 11, 12, 14], [3, 6], [0, 4, 7, 8, 9, 13], [2, 5, 15]]
+                layer_idx_to_clusters = get_layer_idx_to_clusters(kernel_namedvalue_list=kernel_namedvalue_list,
+                                                                  target_deps=target_deps,
+                                                                  pacesetter_dict=pacesetter_dict)
+                # pacesetter_dict 是残差结构的连接层之间的关系。
+                if pacesetter_dict is not None:
+                    for follower_idx, pacesetter_idx in pacesetter_dict.items():
+                        # 这里将残差的最后一层的剪枝方案直接等同于直连的剪枝方案
+                        if pacesetter_idx in layer_idx_to_clusters:
+                            layer_idx_to_clusters[follower_idx] = layer_idx_to_clusters[pacesetter_idx]
+                # 保存聚类的 idx 结果
+                np.save(clusters_save_path, layer_idx_to_clusters)
+            else:
+                while not os.path.exists(clusters_save_path):
+                    time.sleep(10)
+                    print('sleep, waiting for process 0 to calculate clusters')
+                layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
+
+        # 根据 聚类的通道的结果，生成 matrix，方便计算
+        param_name_to_merge_matrix = generate_merge_matrix_for_kernel(deps=deps,
+                                                                      layer_idx_to_clusters=layer_idx_to_clusters,
+                                                                      kernel_namedvalue_list=kernel_namedvalue_list)
+        # 这块的功能似乎是要添加每层对于的 bias\gamma\beta 进入这个 param_name_to_merge_matrix
+        add_vecs_to_merge_mat_dicts(param_name_to_merge_matrix)
+        # core code 聚类结果的梯度计算，作为新的 weight decay
+        param_name_to_decay_matrix = generate_decay_matrix_for_kernel_and_vecs(
+            deps=deps,
+            layer_idx_to_clusters=layer_idx_to_clusters,
+            kernel_namedvalue_list=kernel_namedvalue_list,
+            weight_decay=1e-4,
+            weight_decay_bias=0,
+            centri_strength=centri_strength)
+        # ----------------------------------- done -----------------------------------
+
+        # ------------------- 获取聚类 -------------------
+        conv_idx = 0
+        param_to_clusters = {} # 通过 layer_idx_to_clusters 获得 param_to_clusters
+        for k, v in model.named_parameters():
+            if v.dim() != 4:
+                continue
+            if conv_idx in layer_idx_to_clusters:
+                for clsts in layer_idx_to_clusters[conv_idx]:
+                    if len(clsts) > 1:
+                        param_to_clusters[v] = layer_idx_to_clusters[conv_idx]
+                        break
+            conv_idx += 1
+        # ----------------------------------- done -----------------------------------
+
+        start_epoch, end_epoch = 200, args.total_epochs
+
+        kwargs = {"param_name_to_merge_matrix":param_name_to_merge_matrix, "param_name_to_decay_matrix":param_name_to_decay_matrix}
+        best_acc = train_core(model, train_loader, test_loader, model_save_path, model_name+'-part-cluster', optimizer, scheduler, loss_func, 
+                    best_acc, writer, start_epoch, end_epoch, is_update=True, param_to_clusters=param_to_clusters,layer_idx_to_clusters=layer_idx_to_clusters, **kwargs)
         
         if local_rank == 0:
             print("Best Acc=%.4f" % (best_acc))
@@ -362,6 +427,9 @@ def train_core(model, train_loader, test_loader,
                 os.remove(model_file)
             torch.save(model.module, model_file)
             best_acc = acc
+        if (epoch % 20) == 19 and local_rank == 0:
+            model_file = model_save_path + model_name +f'-{epoch}-round{args.round}.pth' 
+            torch.save(model.module, model_file)
         scheduler.step()
         if writer != None:
             writer.add_scalar('eval/acc', acc, epoch)
@@ -390,14 +458,13 @@ def train_core(model, train_loader, test_loader,
 def main():
     model_save_path = 'save/train_and_prune/' + TIMESTAMP
     tensorboard_log_path = TENSORBOARD_LOG_DIR + TIMESTAMP
-    tos_model_save_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test_600epoch'
-    tos_tensorboard_log_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test_600epoch'
+    tos_model_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test2_600epoch/' +'0.90-'+ TIMESTAMP
+    tos_tensorboard_log_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test2_600epoch/' +'0.90-'+ TIMESTAMP
+    print(tos_model_save_path)
 
     if local_rank == 0:
         os.makedirs(model_save_path, exist_ok=True)
         os.makedirs(tensorboard_log_path, exist_ok=True)
-        os.makedirs(tos_model_save_path, exist_ok=True)
-        os.makedirs(tos_tensorboard_log_path, exist_ok=True)
 
     train_loader, test_loader = get_dataloader()
 
@@ -407,6 +474,8 @@ def main():
         model_name = "ResNet50"
         train_model(model,model_name, train_loader, test_loader, model_save_path)
         if local_rank == 0:
+            os.makedirs(tos_model_save_path, exist_ok=True)
+            os.makedirs(tos_tensorboard_log_path, exist_ok=True)
             copy_files(model_save_path, tos_model_save_path)
             copy_files(tensorboard_log_path, tos_tensorboard_log_path)
     elif args.mode == 'train_with_csgd':
@@ -418,6 +487,8 @@ def main():
         model_name = "ResNet50-CSGD"
         train_with_csgd(model, model_name, train_loader,test_loader,is_resume=True, model_save_path= model_save_path)
         if local_rank == 0:
+            os.makedirs(tos_model_save_path, exist_ok=True)
+            os.makedirs(tos_tensorboard_log_path, exist_ok=True)
             copy_files(model_save_path, tos_model_save_path)
             copy_files(tensorboard_log_path, tos_tensorboard_log_path)
     elif args.mode == 'prune':

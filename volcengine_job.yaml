@@ -31,6 +31,6 @@ ActiveDeadlineSeconds: 432000
 EnableTensorBoard: true
 Storages:
   - Type: "Tos"
-    MountPath: "/Tos"
+    MountPath: "/tos"
     Bucket: "sharedata"
     Prefix: "/zhengxia"

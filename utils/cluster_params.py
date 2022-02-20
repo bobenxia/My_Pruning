@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
 
 
 def cluster_by_kmeans(kernel_value, num_cluster):
@@ -58,7 +59,7 @@ def generate_itr_to_target_deps_by_schedule_vector(schedule, origin_deps, intern
     final_deps = np.array(origin_deps)
     for i in range(1, len(origin_deps)):  # starts from 0 if you want to prune the first layer
         # if i in internal_kernel_idxes:
-        final_deps[i] = max(np.ceil(final_deps[i] * schedule).astype(np.int32),1)
+        final_deps[i] = max(np.ceil(final_deps[i] * schedule).astype(np.int32), 1)
         # else:
     return final_deps
 
@@ -85,9 +86,10 @@ def generate_merge_matrix_for_kernel(deps, layer_idx_to_clusters, kernel_namedva
         # 这个 matrix 是为了加快计算用的
     return result
 
+
 #   Recently it is popular to cancel weight decay on vecs
-def generate_decay_matrix_for_kernel_and_vecs(deps, layer_idx_to_clusters, kernel_namedvalue_list,
-                                              weight_decay, weight_decay_bias, centri_strength):
+def generate_decay_matrix_for_kernel_and_vecs(deps, layer_idx_to_clusters, kernel_namedvalue_list, weight_decay, weight_decay_bias,
+                                              centri_strength):
     # weight_decay_bias 现在不用了，一般设置为0
     # centri_strength 是人为设置的超参，控制组内的点聚集的速度
     result = {}
@@ -122,6 +124,7 @@ def generate_decay_matrix_for_kernel_and_vecs(deps, layer_idx_to_clusters, kerne
         result[beta_name] = vec_mat
 
     return result
+
 
 def get_bias_gamma_and_beta_name(kernel_name):
     bias_name = kernel_name.replace('weight', 'bias')
@@ -166,7 +169,7 @@ def calcu_sum_of_samplers_to_their_closest_cluster_center(model, layer_idx_to_cl
                 num_clsts = len(clsts)
                 if num_clsts > 1:
                     km = KMeans(n_clusters=1)
-                    km.fit(pvalue[clsts,:])
+                    km.fit(pvalue[clsts, :])
                     sum += km.inertia_
         # print(k, sum)
         conv_idx += 1
@@ -174,11 +177,29 @@ def calcu_sum_of_samplers_to_their_closest_cluster_center(model, layer_idx_to_cl
     # print(sum)
     return sum
 
-if __name__=="__main__":
-    import torchvision
-    from utils.model_utils import ModelUtils
-    from utils.constant import RESNET50_ORIGIN_DEPS_FLATTENED
 
+def generate_itr_for_model_follow_global_cluster(schedule, model):
+    pca = PCA(n_components=schedule)
+    result = []
+    for k, v in model.state_dict().items():
+        weight = v.cpu().numpy()
+        if len(weight.shape) == 4:
+            if len(result) == 0:  # 跳过第一个卷积层，一般不剪枝
+                result.append(weight.shape[0])
+            else:
+                weight = np.reshape(weight, (weight.shape[0], -1))
+                pca_res = pca.fit_transform(weight)
+                num_channel = int(pca_res.shape[1] / 16 + 0.5) * 16
+                result.append(num_channel)
+                print(k, ":    ", weight.shape[0], " -> ", pca_res.shape[1], " -> ", num_channel)
+    return np.array(result)
+
+
+if __name__ == "__main__":
+    import torchvision
+
+    from utils.constant import RESNET50_ORIGIN_DEPS_FLATTENED
+    from utils.model_utils import ModelUtils
 
     model = torchvision.models.resnet50(pretrained=True)
     model_utils = ModelUtils(local_rank=0)
@@ -191,8 +212,8 @@ if __name__=="__main__":
 
     print(layer_idx_to_clusters.keys())
     param_name_to_merge_matrix = generate_merge_matrix_for_kernel(deps=RESNET50_ORIGIN_DEPS_FLATTENED,
-                                                                      layer_idx_to_clusters=layer_idx_to_clusters,
-                                                                      kernel_namedvalue_list=kernel_namedvalue_list)
+                                                                  layer_idx_to_clusters=layer_idx_to_clusters,
+                                                                  kernel_namedvalue_list=kernel_namedvalue_list)
     # torch.set_printoptions(profile="full")
     # print(param_name_to_merge_matrix['layer1.0.conv1.weight'])
     print(param_name_to_merge_matrix.keys())
@@ -205,4 +226,4 @@ if __name__=="__main__":
 
     # for k, v in model.state_dict().items():
     #     if k in param_name_to_merge_matrix.keys():
-    #         print(k)    
+    #         print(k)
