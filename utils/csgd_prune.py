@@ -194,7 +194,7 @@ if __name__ == "__main__":
     #                             new_deps=target_deps)
     #         copy_files(output_dir, f'/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_{p}_{lr_str}_600epoch/')
 
-    clusters_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.003_0.50_600epoch/clusters.npy'
+    clusters_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_test2_600epoch/0.90-2022-02-20T16-40-41/clusters.npy'
 
     layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
     print(layer_idx_to_clusters)
@@ -202,17 +202,17 @@ if __name__ == "__main__":
     
 
     model = ResNet50(num_classes=10)
-    output_dir = "save/train_and_prune"
+    output_dir = "save/train_and_prune/"
 
     engine = ModelUtils(local_rank=0, for_eval=True)
     engine.setup_log(name='test', log_dir=output_dir, file_name='ResNet50-CSGD-test-log.txt')
-    engine.register_state(scheduler=None, model=model, optimizer=None)
-    engine.show_variables()
+    # engine.register_state(scheduler=None, model=model, optimizer=None)
+    # engine.show_variables()
 
-    ckpt = '/Tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_test2_600epoch/0.95-2022-02-20T16-40-49/ResNet50-CSGD-round0.pth'
+    ckpt = '/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_test2_600epoch/0.90-2022-02-20T16-40-41/ResNet50-CSGD-part-cluster-599-round0.pth'
     model = torch.load(ckpt, map_location=lambda storage, loc: storage)
     engine.register_state(scheduler=None, model=model, optimizer=None)
-    engine.show_variables()
+    # engine.show_variables()
 
 
     succeeding_strategy = RESNET50_succeeding_STRATEGY
@@ -230,4 +230,4 @@ if __name__ == "__main__":
                         save_file=output_dir+'prune_mode.hdf5',
                         succeeding_strategy=succeeding_strategy,
                         new_deps=target_deps)
-    copy_files(output_dir, '/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_test2_600epoch/0.95-2022-02-20T16-40-49')
+    # copy_files(output_dir, '/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_test2_600epoch/0.95-2022-02-20T16-40-49')
