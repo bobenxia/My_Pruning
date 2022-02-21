@@ -54,7 +54,7 @@ TENSORBOARD_LOG_DIR = os.getenv("TENSORBOARD_LOG_PATH", "/tensorboard_logs/")
 
 
 def get_dataloader():
-    train_loader = DataLoader(CIFAR10('/Tos/cifar_10',
+    train_loader = DataLoader(CIFAR10('/tos/cifar_10',
                                       train=True,
                                       transform=transforms.Compose([
                                           transforms.RandomCrop(32, padding=4),
@@ -64,7 +64,7 @@ def get_dataloader():
                                       download=True),
                               batch_size=args.batch_size,
                               num_workers=2)
-    test_loader = DataLoader(CIFAR10('/Tos/cifar_10',
+    test_loader = DataLoader(CIFAR10('/tos/cifar_10',
                                      train=False,
                                      transform=transforms.Compose([
                                          transforms.ToTensor(),
@@ -359,8 +359,8 @@ def train_core(model, train_loader, test_loader,
 def main():
     model_save_path = 'save/train_and_prune/' + TIMESTAMP
     tensorboard_log_path = TENSORBOARD_LOG_DIR + TIMESTAMP
-    tos_model_save_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_0.0003_0.25_600epoch'
-    tos_tensorboard_log_path = '/Tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_0.0003_0.25_600epoch'
+    tos_model_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_0.0003_0.25_600epoch'
+    tos_tensorboard_log_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_0.0003_0.25_600epoch'
 
     if local_rank == 0:
         os.makedirs(model_save_path, exist_ok=True)

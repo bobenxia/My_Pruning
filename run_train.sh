@@ -19,7 +19,7 @@ pip3 install h5py
 # pip3 install tabulate
 
 # # ln dataset from TOS to code
-# ln -s /Tos ./datasets/COCO
+# ln -s /tos ./datasets/COCO
 
 # debug
 # export NCCL_DEBUG=INFO
