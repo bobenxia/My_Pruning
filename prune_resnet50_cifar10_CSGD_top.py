@@ -328,7 +328,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
         if local_rank == 0:
             print("Best Acc=%.4f" % (best_acc))
 
-        # ---------------------------  全局聚类    ------------------------------
+        # ---------------------------  局部聚类    ------------------------------
         schedule = 0.90 # 超参，控制 pca 拟合情况
         target_deps = generate_itr_for_model_follow_global_cluster(schedule, model)
         clusters_save_path = os.path.join(model_save_path, 'clusters.npy')
@@ -509,7 +509,7 @@ def main():
         #     copy_file(model_save_path + model_name +'-round%d.pth' % (args.round), tos_model_save_path)
     elif args.mode == 'test':
         # # ckpt = 'save/train_and_prune/2022-02-16T00-42-55/ResNet50-finetune-round1.pth'
-        ckpt = "save/train_and_prune/2022-02-21T11-25-23/ResNet50-CSGD-finetune-round1.pth"
+        ckpt = "save/train_and_prune/2022-02-22T10-38-38/ResNet50-CSGD-finetune-round1.pthy"
         print("Load model from %s" % (ckpt))
         # need load model to cpu, avoid computing model GPU memory errors
         model = torch.load(ckpt, map_location=torch.device("cpu"))

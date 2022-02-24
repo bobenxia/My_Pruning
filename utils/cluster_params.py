@@ -189,7 +189,8 @@ def generate_itr_for_model_follow_global_cluster(schedule, model):
             else:
                 weight = np.reshape(weight, (weight.shape[0], -1))
                 pca_res = pca.fit_transform(weight)
-                num_channel = int(pca_res.shape[1] / 16 + 0.5) * 16
+                weight = np.transpose(weight)
+                num_channel = int(pca_res.shape[1]/16+0.5) * 16 if int(pca_res.shape[1]/16+0.5) * 16 != 0 else 16
                 result.append(num_channel)
                 print(k, ":    ", weight.shape[0], " -> ", pca_res.shape[1], " -> ", num_channel)
     return np.array(result)

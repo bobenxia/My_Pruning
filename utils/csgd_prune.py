@@ -194,7 +194,7 @@ if __name__ == "__main__":
     #                             new_deps=target_deps)
     #         copy_files(output_dir, f'/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_{p}_{lr_str}_600epoch/')
 
-    clusters_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_test2_600epoch/0.90-2022-02-20T16-40-41/clusters.npy'
+    clusters_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_test2_600epoch/0.95-2022-02-20T16-40-49/clusters.npy'
 
     layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
     print(layer_idx_to_clusters)
@@ -209,7 +209,7 @@ if __name__ == "__main__":
     # engine.register_state(scheduler=None, model=model, optimizer=None)
     # engine.show_variables()
 
-    ckpt = '/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_test2_600epoch/0.90-2022-02-20T16-40-41/ResNet50-CSGD-part-cluster-599-round0.pth'
+    ckpt = '/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_test2_600epoch/0.95-2022-02-20T16-40-49/ResNet50-CSGD-part-cluster-599-round0.pth'
     model = torch.load(ckpt, map_location=lambda storage, loc: storage)
     engine.register_state(scheduler=None, model=model, optimizer=None)
     # engine.show_variables()

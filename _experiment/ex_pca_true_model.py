@@ -14,10 +14,11 @@ def generate_itr_for_model_follow_global_cluster(schedule, model):
                 result.append(weight.shape[0])
             else:
                 weight = np.reshape(weight, (weight.shape[0], -1))
+                weight = np.transpose(weight)
                 pca_res = pca.fit_transform(weight)
-                num_channel = int(pca_res.shape[1]/16+0.5) * 16
+                num_channel = int(pca_res.shape[1]/16+0.5) * 16 if int(pca_res.shape[1]/16+0.5) * 16 != 0 else 16
                 result.append(num_channel)
-                print(k,":    ",weight.shape[0]," -> ", pca_res.shape[1]," -> ", num_channel)
+                print(k,":    ",weight.shape[1]," -> ", pca_res.shape[1]," -> ", num_channel)
     return np.array(result)
 
 # ckpt = '/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_0.003_0.75_600epoch/ResNet50-CSGD-round0.pth'
