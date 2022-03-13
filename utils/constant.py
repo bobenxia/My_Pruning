@@ -209,6 +209,7 @@ for i in RESNET50_FOLLOW_DICT.keys():
         RESNET50_succeeding_STRATEGY[i-1] = i + 1
 
 resnet_n_to_num_blocks = {50: (3, 4, 6, 3), 101: (3, 4, 23, 3), 152: (3, 8, 36, 3)}
+print(RESNET50_succeeding_STRATEGY)
 
 
 def resnet_bottleneck_origin_deps_converted(res_n):

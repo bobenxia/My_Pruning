@@ -30,13 +30,16 @@ def _is_follower(layer_idx, pacesetter_dict):
     return (layer_idx in followers_and_pacesetters) and (pacesetter_dict[layer_idx] != layer_idx)
 
 
-def get_layer_idx_to_clusters(kernel_namedvalue_list, target_deps, pacesetter_dict):
+def get_layer_idx_to_clusters(kernel_namedvalue_list, target_deps, pacesetter_dict, skip_pruning_list):
     # 返回的是一个字典，每个 key 对应的 value 的值是一个长度等于当前层长度的聚类结果。[[1, 10, 11, 12, 14], [3, 6], [0, 4, 7, 8, 9, 13], [2, 5, 15]]
     result = {}
     for layer_idx, named_kv in enumerate(kernel_namedvalue_list):
         num_filters = named_kv.value.shape[0]
 
         if pacesetter_dict is not None and _is_follower(layer_idx, pacesetter_dict):
+            continue
+
+        if skip_pruning_list is not None and layer_idx in skip_pruning_list:
             continue
 
         if num_filters >= target_deps[layer_idx]:
@@ -47,7 +50,7 @@ def get_layer_idx_to_clusters(kernel_namedvalue_list, target_deps, pacesetter_di
     return result
 
 
-def generate_itr_to_target_deps_by_schedule_vector(schedule, origin_deps, internal_kernel_idxes):
+def generate_itr_to_target_deps_by_schedule_vector(schedule, origin_deps, deps_idx_with_skip_pruning = None):
     """
         schedule 是通道保留比例
         origin_deps 是模型卷积通道列表
@@ -58,8 +61,10 @@ def generate_itr_to_target_deps_by_schedule_vector(schedule, origin_deps, intern
     # TODO: 现在没有考虑残差结构内外部剪枝不同的情况，全部按照一个比例剪枝
     final_deps = np.array(origin_deps)
     for i in range(1, len(origin_deps)):  # starts from 0 if you want to prune the first layer
-        # if i in internal_kernel_idxes:
-        final_deps[i] = max(np.ceil(final_deps[i] * schedule).astype(np.int32), 1)
+        if deps_idx_with_skip_pruning and i in deps_idx_with_skip_pruning:
+            continue
+        else:
+            final_deps[i] = max(np.ceil(final_deps[i] * schedule).astype(np.int32), 1)
         # else:
     return final_deps
 
@@ -171,10 +176,7 @@ def calcu_sum_of_samplers_to_their_closest_cluster_center(model, layer_idx_to_cl
                     km = KMeans(n_clusters=1)
                     km.fit(pvalue[clsts, :])
                     sum += km.inertia_
-        # print(k, sum)
         conv_idx += 1
-
-    # print(sum)
     return sum
 
 
@@ -203,10 +205,10 @@ if __name__ == "__main__":
     from utils.model_utils import ModelUtils
 
     model = torchvision.models.resnet50(pretrained=True)
-    model_utils = ModelUtils(local_rank=0)
+    model_utils = ModelUtils(local_rank=0,for_eval=True)
     model_utils.register_state(model=model)
     kernel_namedvalue_list = model_utils.get_all_conv_kernel_namedvalue_as_list()
-    # print(kernel_namedvalue_list)
+    print(len(kernel_namedvalue_list))
 
     clusters_save_path = './clusters_save.npy'
     layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
@@ -219,8 +221,10 @@ if __name__ == "__main__":
     # print(param_name_to_merge_matrix['layer1.0.conv1.weight'])
     print(param_name_to_merge_matrix.keys())
 
-    # for k, v in model.state_dict().items():
-    #     print(k)
+    for k, v in model.state_dict().items():
+        weight = v.cpu().numpy()
+        if len(weight.shape) == 4:
+            print(v.shape[0])
 
     # add_vecs_to_merge_mat_dicts(param_name_to_merge_matrix)
     # print(param_name_to_merge_matrix.keys())

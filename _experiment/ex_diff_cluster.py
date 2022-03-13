@@ -84,17 +84,17 @@ def cluster_by_meanshift(kernel_value, beta):
 
 if __name__ == "__main__":
     torch.manual_seed(3)
-    # import torchvision
-    # model = torchvision.models.resnet50(pretrained=True)
+    import torchvision
+    model = torchvision.models.resnet50(pretrained=True)
 
-    import os
-    ckpt = f"save/train_and_prune/2022-02-19T13-32-09/ResNet50-CSGD-199-round0.pth"
-    if os.path.exists(ckpt):
-        print(ckpt)
-    model = torch.load(ckpt, map_location=torch.device("cpu"))
+    # import os
+    # ckpt = f"save/train_and_prune/2022-02-19T13-32-09/ResNet50-CSGD-199-round0.pth"
+    # if os.path.exists(ckpt):
+    #     print(ckpt)
+    # model = torch.load(ckpt, map_location=torch.device("cpu"))
 
     for k, v in model.state_dict().items():
-        if k == "layer2.0.conv1.weight":
+        if k == "layer2.0.conv2.weight":
             weight = v.cpu().numpy()
     print(weight.shape)
 

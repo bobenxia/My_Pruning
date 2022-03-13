@@ -184,8 +184,8 @@ def update_net_params(net, param_name_to_merge_matrix, param_name_to_decay_matri
 def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, model_save_path):
     # -------------------- 根据模型选择的一些超参 -------------------
     deps = RESNET50_ORIGIN_DEPS_FLATTENED  # resnet50 的 通道数量
-    target_deps_for_kernel_matrix = generate_itr_to_target_deps_by_schedule_vector(1, RESNET50_ORIGIN_DEPS_FLATTENED, RESNET50_INTERNAL_KERNEL_IDXES)
-    target_deps_for_decay_matrix = generate_itr_to_target_deps_by_schedule_vector(0, RESNET50_ORIGIN_DEPS_FLATTENED, RESNET50_INTERNAL_KERNEL_IDXES)
+    target_deps_for_kernel_matrix = generate_itr_to_target_deps_by_schedule_vector(1, RESNET50_ORIGIN_DEPS_FLATTENED)
+    target_deps_for_decay_matrix = generate_itr_to_target_deps_by_schedule_vector(0, RESNET50_ORIGIN_DEPS_FLATTENED)
     pacesetter_dict = {
         4: 4,3: 4,7: 4,10: 4,14: 14,
         13: 14,17: 14,20: 14,23: 14,27: 27,26: 27,30: 27,33: 27,36: 27,
@@ -260,7 +260,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
                 layer_idx_to_clusters_for_kernel_matrix = np.load(clusters_save_path_for_kernel_matrix, allow_pickle=True).item()
         # ----------------------------------- done -----------------------------------
 
-        #--------------------------- 2、生成 kernel martrix -----------------------------------
+        #--------------------------- 2、生成 decay martrix -----------------------------------
         clusters_save_path_for_decay_matrix = os.path.join(model_save_path, 'clusters_for_decay_matrix.npy')
         # clusters_save_path_for_decay_matrix = 'save/train_and_prune/2022-02-08T17-37-47/clusters.npy'
         if os.path.exists(clusters_save_path_for_decay_matrix):
@@ -329,7 +329,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
             print("Best Acc=%.4f" % (best_acc))
 
         # ---------------------------  局部聚类    ------------------------------
-        schedule = 0.90 # 超参，控制 pca 拟合情况
+        schedule = 0.99 # 超参，控制 pca 拟合情况
         target_deps = generate_itr_for_model_follow_global_cluster(schedule, model)
         clusters_save_path = os.path.join(model_save_path, 'clusters.npy')
         if os.path.exists(clusters_save_path):
@@ -458,8 +458,8 @@ def train_core(model, train_loader, test_loader,
 def main():
     model_save_path = 'save/train_and_prune/' + TIMESTAMP
     tensorboard_log_path = TENSORBOARD_LOG_DIR + TIMESTAMP
-    tos_model_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test2_600epoch/' +'0.90-'+ TIMESTAMP
-    tos_tensorboard_log_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test2_600epoch/' +'0.90-'+ TIMESTAMP
+    tos_model_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test2_600epoch/' +'0.99-'+ TIMESTAMP
+    tos_tensorboard_log_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test2_600epoch/' +'0.99-'+ TIMESTAMP
     print(tos_model_save_path)
 
     if local_rank == 0:
