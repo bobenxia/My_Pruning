@@ -20,23 +20,26 @@ from torchvision.datasets import CIFAR10
 
 import model.cifar.resnet as resnet
 import torch_pruning as tp
-from model.cifar.resnet import ResNet50
+# from model.cifar.resnet import resnet56
 from tools.print_model_info import get_model_infor_and_print
 from tools.write_excel import read_excel_and_write
 from utils.model_utils import *
 from utils.misc import copy_file, copy_files
 from utils.misc import load_hdf5
 from utils.cluster_params import generate_itr_for_model_follow_global_cluster
+from utils.stagewise_resnet import create_SRC56
+from utils.constant import rc_pacesetter_dict
+from utils.builder import ConvBuilder
+from utils.constant import rc_origin_deps_flattened, rc_internal_layers
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--mode',
                     type=str,
-                    # required=True,
-                    default='test',
+                    required=True,
                     choices=['train', 'prune', 'test', 'finetune', 'train_with_csgd'])
-parser.add_argument('--batch_size', type=int, default=512)
+parser.add_argument('--batch_size', type=int, default=128)
 parser.add_argument('--verbose', action='store_true', default=False)
 parser.add_argument('--total_epochs', type=int, default=600)
 parser.add_argument('--step_size', type=int, default=30)
@@ -44,18 +47,19 @@ parser.add_argument('--round', type=int, default=1)
 parser.add_argument('--pruned_per', type=float, default=0.125)
 parser.add_argument("--local_rank", default=-1, type=int)
 parser.add_argument('--scheduler_', type=str, default='CAWR')
-parser.add_argument('--lr_', type=float, default=0.04)
+parser.add_argument('--lr_', type=float, default=0.1)
 
 args = parser.parse_args()
 local_rank = args.local_rank
 block_prune_probs = [args.pruned_per] * 16
 TIMESTAMP = "{0:%Y-%m-%dT%H-%M-%S/}".format(datetime.now())
+TIMESTAMP = "2022-04-20T00-34-01/"
 TENSORBOARD_LOG_DIR = os.getenv("TENSORBOARD_LOG_PATH", "/tensorboard_logs/")
 
 
 
 def get_dataloader():
-    train_loader = DataLoader(CIFAR10('/tos/cifar_10',
+    train_loader = DataLoader(CIFAR10('/Tos/cifar_10',
                                       train=True,
                                       transform=transforms.Compose([
                                           transforms.RandomCrop(32, padding=4),
@@ -65,7 +69,7 @@ def get_dataloader():
                                       download=True),
                               batch_size=args.batch_size,
                               num_workers=2)
-    test_loader = DataLoader(CIFAR10('/tos/cifar_10',
+    test_loader = DataLoader(CIFAR10('/Tos/cifar_10',
                                      train=False,
                                      transform=transforms.Compose([
                                          transforms.ToTensor(),
@@ -108,9 +112,6 @@ def train_model(model, model_name, train_loader, test_loader,model_save_path):
         raise ValueError("scheduler type error!")
     loss_func = nn.CrossEntropyLoss().to(local_rank)
 
-    hdf5_file = f'save/train_and_prune/prune_mode.hdf5'
-    print(hdf5_file)
-    load_hdf5(model, hdf5_file)
 
     model.to(local_rank)
 
@@ -183,23 +184,26 @@ def update_net_params(net, param_name_to_merge_matrix, param_name_to_decay_matri
 
 def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, model_save_path):
     # -------------------- 根据模型选择的一些超参 -------------------
-    deps = RESNET50_ORIGIN_DEPS_FLATTENED  # resnet50 的 通道数量
-    target_deps_for_kernel_matrix = generate_itr_to_target_deps_by_schedule_vector(1, RESNET50_ORIGIN_DEPS_FLATTENED)
-    target_deps_for_decay_matrix = generate_itr_to_target_deps_by_schedule_vector(0, RESNET50_ORIGIN_DEPS_FLATTENED)
-    pacesetter_dict = {
-        4: 4,3: 4,7: 4,10: 4,14: 14,
-        13: 14,17: 14,20: 14,23: 14,27: 27,26: 27,30: 27,33: 27,36: 27,
-        39: 27,42: 27,46: 46,45: 46,49: 46,52: 46
-    }
+    deps = rc_origin_deps_flattened(9)  # resnet56 的 通道数量
+    origin_deps_flattened = rc_origin_deps_flattened(9)
+    internal_kernel_idexs = rc_internal_layers(9)
+    target_deps_for_kernel_matrix = generate_itr_to_target_deps_by_schedule_vector(1, origin_deps_flattened, internal_kernel_idexs)
+    target_deps_for_decay_matrix = generate_itr_to_target_deps_by_schedule_vector(0, origin_deps_flattened, internal_kernel_idexs)
+    # pacesetter_dict = {
+    #     4: 4,3: 4,7: 4,10: 4,14: 14,
+    #     13: 14,17: 14,20: 14,23: 14,27: 27,26: 27,30: 27,33: 27,36: 27,
+    #     39: 27,42: 27,46: 46,45: 46,49: 46,52: 46
+    # }
+    pacesetter_dict = rc_pacesetter_dict(9)
     # --------------------------- done ----------------------------
 
     # ------------ parepare optimizer, scheduler, criterion -------
     optimizer = torch.optim.SGD(model.parameters(), lr=args.lr_, momentum=0.9, weight_decay=1e-4)
     # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, eta_min=0, T_0=args.total_epochs//3+1, T_mult=2)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, eta_min=0.004, T_0=args.total_epochs//3+1, T_mult=2)
     # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, eta_min=0.004, T_0=args.total_epochs+1, T_mult=2)
     loss_func = nn.CrossEntropyLoss().to(local_rank)
-    centri_strength=0.003
+    centri_strength=0.0003
     # --------------------------- done ------------------------------
 
     # ------------------- DDP：DDP backend初始化 --------------------
@@ -226,7 +230,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
 
     # ------------------- 全局聚类 以及 后面的局部聚类 ----------------
     with ModelUtils(local_rank=local_rank) as engine:
-        engine.setup_log(name='train', log_dir=model_save_path, file_name='ResNet50-CSGD-log.txt')
+        engine.setup_log(name='train', log_dir=model_save_path, file_name='resnet56-CSGD-log.txt')
         engine.register_state(scheduler=scheduler, model=model, optimizer=optimizer)
 
         # ---------------------------  全局聚类    ------------------------------
@@ -254,13 +258,14 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
                 # 保存聚类的 idx 结果
                 np.save(clusters_save_path_for_kernel_matrix, layer_idx_to_clusters_for_kernel_matrix)
             else:
+                time.sleep(30)
                 while not os.path.exists(clusters_save_path_for_kernel_matrix):
-                    time.sleep(10)
-                    print('sleep, waiting for process 0 to calculate clusters')
+                    print(f'{local_rank} sleep, waiting for process 0 to calculate [{clusters_save_path_for_kernel_matrix}]')
+                    time.sleep(30)
                 layer_idx_to_clusters_for_kernel_matrix = np.load(clusters_save_path_for_kernel_matrix, allow_pickle=True).item()
         # ----------------------------------- done -----------------------------------
 
-        #--------------------------- 2、生成 decay martrix -----------------------------------
+        #--------------------------- 2、生成 kernel martrix -----------------------------------
         clusters_save_path_for_decay_matrix = os.path.join(model_save_path, 'clusters_for_decay_matrix.npy')
         # clusters_save_path_for_decay_matrix = 'save/train_and_prune/2022-02-08T17-37-47/clusters.npy'
         if os.path.exists(clusters_save_path_for_decay_matrix):
@@ -282,9 +287,10 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
                 # 保存聚类的 idx 结果
                 np.save(clusters_save_path_for_decay_matrix, layer_idx_to_clusters_for_decay_matrix)
             else:
+                time.sleep(30)
                 while not os.path.exists(clusters_save_path_for_decay_matrix):
-                    time.sleep(10)
-                    print('sleep, waiting for process 0 to calculate clusters')
+                    print(f'{local_rank} sleep, waiting for process 0 to calculate  [{clusters_save_path_for_decay_matrix}]')
+                    time.sleep(30)
                 layer_idx_to_clusters_for_decay_matrix = np.load(clusters_save_path_for_decay_matrix, allow_pickle=True).item()
         # ----------------------------------- done -----------------------------------
         
@@ -329,7 +335,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
             print("Best Acc=%.4f" % (best_acc))
 
         # ---------------------------  局部聚类    ------------------------------
-        schedule = 0.99 # 超参，控制 pca 拟合情况
+        schedule = 0.97 # 超参，控制 pca 拟合情况
         target_deps = generate_itr_for_model_follow_global_cluster(schedule, model)
         clusters_save_path = os.path.join(model_save_path, 'clusters.npy')
         if os.path.exists(clusters_save_path):
@@ -350,9 +356,10 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
                 # 保存聚类的 idx 结果
                 np.save(clusters_save_path, layer_idx_to_clusters)
             else:
+                time.sleep(30)
                 while not os.path.exists(clusters_save_path):
-                    time.sleep(10)
-                    print('sleep, waiting for process 0 to calculate clusters')
+                    print(f'{local_rank} sleep, waiting for process 0 to calculate [layer_idx_to_clusters]')
+                    time.sleep(20)
                 layer_idx_to_clusters = np.load(clusters_save_path, allow_pickle=True).item()
 
         # 根据 聚类的通道的结果，生成 matrix，方便计算
@@ -413,23 +420,31 @@ def train_core(model, train_loader, test_loader,
 
             optimizer.step()
             optimizer.zero_grad()
-            if i % 10 == 0 and args.verbose:
+            if i % 10 == 0 and args.verbose and local_rank == 0:
                 print("Epoch %d/%d, iter %d/%d, loss=%.4f" %
                     (epoch, args.total_epochs, i, len(train_loader), loss.item()))
         model.eval()
         acc = eval(model, test_loader)
-        if local_rank==0:
+        if local_rank == 0:
             print("Epoch %d/%d, Acc=%.4f" % (epoch, args.total_epochs, acc))
 
         model_file = model_save_path + model_name +'-round%d.pth' % (args.round)
         if best_acc < acc and local_rank == 0:
+            best_acc = acc
             if  os.path.exists(model_file):
                 os.remove(model_file)
-            torch.save(model.module, model_file)
-            best_acc = acc
+            torch.save({
+                'epoch': epoch + 1,
+                'state_dict': model.module.state_dict(),
+                'best_prec1': best_acc,
+            }, model_file)
         if (epoch % 20) == 19 and local_rank == 0:
             model_file = model_save_path + model_name +f'-{epoch}-round{args.round}.pth' 
-            torch.save(model.module, model_file)
+            torch.save({
+                'epoch': epoch + 1,
+                'state_dict': model.module.state_dict(),
+                'best_prec1': best_acc,
+            }, model_file)
         scheduler.step()
         if writer != None:
             writer.add_scalar('eval/acc', acc, epoch)
@@ -458,8 +473,8 @@ def train_core(model, train_loader, test_loader,
 def main():
     model_save_path = 'save/train_and_prune/' + TIMESTAMP
     tensorboard_log_path = TENSORBOARD_LOG_DIR + TIMESTAMP
-    tos_model_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test2_600epoch/' +'0.99-'+ TIMESTAMP
-    tos_tensorboard_log_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test2_600epoch/' +'0.99-'+ TIMESTAMP
+    tos_model_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test2_600epoch/' +'0.97-'+ TIMESTAMP
+    tos_tensorboard_log_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test2_600epoch/' +'0.97-'+ TIMESTAMP
     print(tos_model_save_path)
 
     if local_rank == 0:
@@ -470,53 +485,54 @@ def main():
 
     if args.mode == 'train':
         args.round = 0
-        model = ResNet50(num_classes=10)
-        model_name = "ResNet50"
+        # model = resnet56()
+        deps = rc_origin_deps_flattened(9)
+        convbuilder = ConvBuilder(base_config=None)
+        model = create_SRC56(deps ,convbuilder)
+        model_name = "resnet56"
         train_model(model,model_name, train_loader, test_loader, model_save_path)
-        if local_rank == 0:
-            os.makedirs(tos_model_save_path, exist_ok=True)
-            os.makedirs(tos_tensorboard_log_path, exist_ok=True)
-            copy_files(model_save_path, tos_model_save_path)
-            copy_files(tensorboard_log_path, tos_tensorboard_log_path)
+        # if local_rank == 0:
+        #     os.makedirs(tos_model_save_path, exist_ok=True)
+        #     os.makedirs(tos_tensorboard_log_path, exist_ok=True)
+        #     copy_files(model_save_path, tos_model_save_path)
+        #     copy_files(tensorboard_log_path, tos_tensorboard_log_path)
     elif args.mode == 'train_with_csgd':
         args.round = 0
-        model = ResNet50(num_classes=10)
-        # previous_ckpt = 'save/train_and_prune/ResNet50-round0.pth'
+        # model = resnet56()
+        deps = rc_origin_deps_flattened(9)
+        convbuilder = ConvBuilder(base_config=None)
+        model = create_SRC56(deps ,convbuilder)
+        # previous_ckpt = 'save/train_and_prune/resnet56-round0.pth'
         # print("Pruning round %d, load model from %s" % (args.round, previous_ckpt))
         # model = torch.load(previous_ckpt, map_location=torch.device("cpu"))
-        model_name = "ResNet50-CSGD"
+        model_name = "resnet56-CSGD"
         train_with_csgd(model, model_name, train_loader,test_loader,is_resume=True, model_save_path= model_save_path)
-        if local_rank == 0:
-            os.makedirs(tos_model_save_path, exist_ok=True)
-            os.makedirs(tos_tensorboard_log_path, exist_ok=True)
-            copy_files(model_save_path, tos_model_save_path)
-            copy_files(tensorboard_log_path, tos_tensorboard_log_path)
     elif args.mode == 'prune':
-        previous_ckpt = 'save/train_and_prune/ResNet50-round%d.pth' % (args.round - 1)
+        previous_ckpt = 'save/train_and_prune/resnet56-round%d.pth' % (args.round - 1)
         print("Pruning round %d, load model from %s" % (args.round, previous_ckpt))
         model = torch.load(previous_ckpt, map_location=torch.device("cpu"))
         prune_model(model)
-        torch.save(model, 'save/train_and_prune/ResNet50-round%d.pth' % (args.round))
+        torch.save(model, 'save/train_and_prune/resnet56-round%d.pth' % (args.round))
     elif args.mode == 'finetune':
-        # previous_ckpt = 'save/train_and_prune/ResNet50-round%d.pth' % (args.round)
+        # previous_ckpt = 'save/train_and_prune/resnet56-round%d.pth' % (args.round)
         # print("Finetune round %d, load model from %s" % (args.round, previous_ckpt))
         # model = torch.load(previous_ckpt, map_location=torch.device("cpu"))
-        model_name = "ResNet50-CSGD-finetune"
-        model = ResNet50(num_classes=10)
+        model_name = "resnet56-CSGD-finetune"
+        model = resnet56(num_classes=10)
 
         train_model(model, model_name, train_loader, test_loader, model_save_path=model_save_path)
         # if local_rank == 0:
         #     copy_file(model_save_path + model_name +'-round%d.pth' % (args.round), tos_model_save_path)
     elif args.mode == 'test':
-        # # ckpt = 'save/train_and_prune/2022-02-16T00-42-55/ResNet50-finetune-round1.pth'
-        ckpt = "save/train_and_prune/2022-02-22T10-38-38/ResNet50-CSGD-finetune-round1.pth"
+        # # ckpt = 'save/train_and_prune/2022-02-16T00-42-55/resnet56-finetune-round1.pth'
+        ckpt = "save/train_and_prune/2022-02-22T10-38-38/resnet56-CSGD-finetune-round1.pth"
         print("Load model from %s" % (ckpt))
         # need load model to cpu, avoid computing model GPU memory errors
         model = torch.load(ckpt, map_location=torch.device("cpu"))
 
         # hdf5_file = f'save/train_and_prune/prune_mode.hdf5'
         # print(hdf5_file)
-        # model = ResNet50(num_classes=10)
+        # model = resnet56(num_classes=10)
         # load_hdf5(model, hdf5_file)
 
         # from utils.misc import load_hdf5
@@ -529,9 +545,9 @@ def main():
         #         # if not os.path.exists(hdf5_file):
         #         #     continue
         #         # print(hdf5_file)
-        #         # model = ResNet50(num_classes=10)
+        #         # model = resnet56(num_classes=10)
         #         # load_hdf5(model, hdf5_file)
-        #         ckpt = f"/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_{l}_{n}_600epoch/ResNet50-CSGD-finetune-round1.pth"
+        #         ckpt = f"/tos/save_data/my_pruning_save_data/log_and_model/SGD_CAWR_{l}_{n}_600epoch/resnet56-CSGD-finetune-round1.pth"
         #         print("Load model from %s" % (ckpt))
         #         # # need load model to cpu, avoid computing model GPU memory errors
         #         model = torch.load(ckpt, map_location=torch.device("cpu"))
@@ -558,7 +574,7 @@ def main():
         fake_input = torch.randn(1, 3, 32, 32)
         model_infor = get_model_infor_and_print(model, fake_input, 0)
 
-        model_infor['Model'] = 'resnet-50'
+        model_infor['Model'] = 'resnet-56'
         model_infor['Top1-acc(%)'] = eval(model, test_loader)
         print(model_infor['Top1-acc(%)'])
         model_infor['Top5-acc(%)'] = ' '

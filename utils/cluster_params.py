@@ -50,7 +50,11 @@ def get_layer_idx_to_clusters(kernel_namedvalue_list, target_deps, pacesetter_di
     return result
 
 
+<<<<<<< Updated upstream
 def generate_itr_to_target_deps_by_schedule_vector(schedule, origin_deps, deps_idx_with_skip_pruning = None):
+=======
+def generate_itr_to_target_deps_by_schedule_vector(schedule, origin_deps, internal_kernel_idxes=None):
+>>>>>>> Stashed changes
     """
         schedule 是通道保留比例
         origin_deps 是模型卷积通道列表
@@ -194,7 +198,7 @@ def generate_itr_for_model_follow_global_cluster(schedule, model):
                 weight = np.transpose(weight)
                 num_channel = int(pca_res.shape[1]/16+0.5) * 16 if int(pca_res.shape[1]/16+0.5) * 16 != 0 else 16
                 result.append(num_channel)
-                print(k, ":    ", weight.shape[0], " -> ", pca_res.shape[1], " -> ", num_channel)
+                print(k, ":    ", weight.shape[1], " -> ", pca_res.shape[1], " -> ", num_channel)
     return np.array(result)
 
 

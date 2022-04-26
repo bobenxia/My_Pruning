@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 from email.policy import default
 from functools import total_ordering
+import torchvision
 
 import numpy as np
 import torch
@@ -44,7 +45,7 @@ parser.add_argument('--round', type=int, default=1)
 parser.add_argument('--pruned_per', type=float, default=0.125)
 parser.add_argument("--local_rank", default=-1, type=int)
 parser.add_argument('--scheduler_', type=str, default='CAWR')
-parser.add_argument('--lr_', type=float, default=0.04)
+parser.add_argument('--lr_', type=float, default=0.004)
 
 args = parser.parse_args()
 local_rank = args.local_rank
@@ -55,7 +56,7 @@ TENSORBOARD_LOG_DIR = os.getenv("TENSORBOARD_LOG_PATH", "/tensorboard_logs/")
 
 
 def get_dataloader():
-    train_loader = DataLoader(CIFAR10('/tos/cifar_10',
+    train_loader = DataLoader(CIFAR10('data/',
                                       train=True,
                                       transform=transforms.Compose([
                                           transforms.RandomCrop(32, padding=4),
@@ -65,7 +66,7 @@ def get_dataloader():
                                       download=True),
                               batch_size=args.batch_size,
                               num_workers=2)
-    test_loader = DataLoader(CIFAR10('/tos/cifar_10',
+    test_loader = DataLoader(CIFAR10('data/',
                                      train=False,
                                      transform=transforms.Compose([
                                          transforms.ToTensor(),
@@ -108,9 +109,6 @@ def train_model(model, model_name, train_loader, test_loader,model_save_path):
         raise ValueError("scheduler type error!")
     loss_func = nn.CrossEntropyLoss().to(local_rank)
 
-    hdf5_file = f'save/train_and_prune/prune_mode.hdf5'
-    print(hdf5_file)
-    load_hdf5(model, hdf5_file)
 
     model.to(local_rank)
 
@@ -184,8 +182,8 @@ def update_net_params(net, param_name_to_merge_matrix, param_name_to_decay_matri
 def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, model_save_path):
     # -------------------- 根据模型选择的一些超参 -------------------
     deps = RESNET50_ORIGIN_DEPS_FLATTENED  # resnet50 的 通道数量
-    target_deps_for_kernel_matrix = generate_itr_to_target_deps_by_schedule_vector(1, RESNET50_ORIGIN_DEPS_FLATTENED)
-    target_deps_for_decay_matrix = generate_itr_to_target_deps_by_schedule_vector(0, RESNET50_ORIGIN_DEPS_FLATTENED)
+    target_deps_for_kernel_matrix = generate_itr_to_target_deps_by_schedule_vector(1, RESNET50_ORIGIN_DEPS_FLATTENED, RESNET50_INTERNAL_KERNEL_IDXES)
+    target_deps_for_decay_matrix = generate_itr_to_target_deps_by_schedule_vector(0, RESNET50_ORIGIN_DEPS_FLATTENED, RESNET50_INTERNAL_KERNEL_IDXES)
     pacesetter_dict = {
         4: 4,3: 4,7: 4,10: 4,14: 14,
         13: 14,17: 14,20: 14,23: 14,27: 27,26: 27,30: 27,33: 27,36: 27,
@@ -260,7 +258,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
                 layer_idx_to_clusters_for_kernel_matrix = np.load(clusters_save_path_for_kernel_matrix, allow_pickle=True).item()
         # ----------------------------------- done -----------------------------------
 
-        #--------------------------- 2、生成 decay martrix -----------------------------------
+        #--------------------------- 2、生成 kernel martrix -----------------------------------
         clusters_save_path_for_decay_matrix = os.path.join(model_save_path, 'clusters_for_decay_matrix.npy')
         # clusters_save_path_for_decay_matrix = 'save/train_and_prune/2022-02-08T17-37-47/clusters.npy'
         if os.path.exists(clusters_save_path_for_decay_matrix):
@@ -329,7 +327,7 @@ def train_with_csgd(model, model_name, train_loader, test_loader, is_resume, mod
             print("Best Acc=%.4f" % (best_acc))
 
         # ---------------------------  局部聚类    ------------------------------
-        schedule = 0.99 # 超参，控制 pca 拟合情况
+        schedule = 0.90 # 超参，控制 pca 拟合情况
         target_deps = generate_itr_for_model_follow_global_cluster(schedule, model)
         clusters_save_path = os.path.join(model_save_path, 'clusters.npy')
         if os.path.exists(clusters_save_path):
@@ -413,12 +411,12 @@ def train_core(model, train_loader, test_loader,
 
             optimizer.step()
             optimizer.zero_grad()
-            if i % 10 == 0 and args.verbose:
+            if i % 10 == 0 and args.verbose and local_rank == 0:
                 print("Epoch %d/%d, iter %d/%d, loss=%.4f" %
                     (epoch, args.total_epochs, i, len(train_loader), loss.item()))
         model.eval()
         acc = eval(model, test_loader)
-        if local_rank==0:
+        if local_rank == 0:
             print("Epoch %d/%d, Acc=%.4f" % (epoch, args.total_epochs, acc))
 
         model_file = model_save_path + model_name +'-round%d.pth' % (args.round)
@@ -458,8 +456,8 @@ def train_core(model, train_loader, test_loader,
 def main():
     model_save_path = 'save/train_and_prune/' + TIMESTAMP
     tensorboard_log_path = TENSORBOARD_LOG_DIR + TIMESTAMP
-    tos_model_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test2_600epoch/' +'0.99-'+ TIMESTAMP
-    tos_tensorboard_log_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'SGD_CAWR_test2_600epoch/' +'0.99-'+ TIMESTAMP
+    tos_model_save_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'VGG_SGD_CAWR_0_1.0_600epoch/' + TIMESTAMP
+    tos_tensorboard_log_path = '/tos/save_data/my_pruning_save_data/log_and_model/' + 'VGG_CAWR_0_1.0_600epoch/' + TIMESTAMP
     print(tos_model_save_path)
 
     if local_rank == 0:
@@ -469,9 +467,10 @@ def main():
     train_loader, test_loader = get_dataloader()
 
     if args.mode == 'train':
-        args.round = 0
-        model = ResNet50(num_classes=10)
-        model_name = "ResNet50"
+        model = torchvision.models.vgg16(pretrained=True)
+        input_lastLayer = model.classifier[6].in_features
+        model.classifier[6] = nn.Linear(input_lastLayer,10)
+        model_name = "vgg"
         train_model(model,model_name, train_loader, test_loader, model_save_path)
         if local_rank == 0:
             os.makedirs(tos_model_save_path, exist_ok=True)
