@@ -29,5 +29,5 @@ if __name__ == "__main__":
     model = models.resnet34()
     data = torch.randn(1, 3, 224, 224)
 
-    mem = get_model_gpu_mem(model, data, 5)
+    mem = get_model_gpu_mem(model, data, 0)
     print("{:<20} {:>12} MB".format('GPU Mem Used:', mem))

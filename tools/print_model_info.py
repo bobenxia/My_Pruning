@@ -46,7 +46,7 @@ if __name__ == "__main__":
     import torchvision.models as models
     model = models.resnet34()
     data = torch.randn(1, 3, 224, 224)
-    gpu_id = 4
+    gpu_id = 0
 
     model_infor = get_model_infor_and_print(model, data, gpu_id)
     print(model_infor)
